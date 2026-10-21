@@ -50,6 +50,7 @@ public sealed partial class ArchiveService
             }
             query = Regex.Replace(query, @"\s+", " ").Trim();
             var personIds = request.Filters.PersonIds.Concat(detected.Select(p => p.Id)).Distinct().ToArray();
+            if (personIds.Length > 32) throw new ArgumentException("Choose at most 32 people in one search.");
             var predicates = BuildPredicates(request.Filters, personIds, overlayExists);
             int limit = Math.Clamp(request.Limit, 1, 1000);
             int offset = ParseCursor(request.Cursor, generation.GenerationId, query, request.Filters);
@@ -155,15 +156,15 @@ public sealed partial class ArchiveService
                     string path = reader.GetString(1);
                     var kind = (FileKind)reader.GetInt32(2);
                     var category = personIds.Length > 0 && query.Length > 0 && (kind is FileKind.Image or FileKind.Video) ? MatchCategory.PossiblePersonAction : item.Exact ? MatchCategory.Exact : item.Semantic ? MatchCategory.Semantic : MatchCategory.Browse;
-                    grouped[fileId] = result = new MutableResult(new SearchResult { FileId = fileId, RelativePath = path, Name = Path.GetFileName(path), Kind = kind, Bytes = reader.GetInt64(3), ModifiedUtc = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture), Thumbnail = moment.Thumbnail, Snippet = Snippet(moment.Text, tokens), MatchCategory = category, Score = item.Score, MatchingPeople = people.Where(p => personIds.Contains(p.Id)).Select(p => p.Name).ToArray() });
+                    grouped[fileId] = result = new MutableResult(new SearchResult { FileId = fileId, RelativePath = path, Name = Path.GetFileName(path), Kind = kind, Bytes = reader.GetInt64(3), ModifiedUtc = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture), Thumbnail = moment.Thumbnail, Snippet = Snippet(moment.Text, tokens), MatchCategory = category, Score = item.Score, MatchingPeople = people.Where(p => personIds.Contains(p.Id)).Select(p => p.Name).ToArray(), MatchedPersonIds = personIds });
                 }
                 if (result.Moments.Count < 12) result.Moments.Add(moment);
             }
             var ordered = grouped.Values.OrderByDescending(p => p.Result.Score).ThenBy(p => p.Result.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray();
             int localOffset = query.Length == 0 ? 0 : offset;
-            var results = ordered.Skip(localOffset).Take(limit).Select(p => p.Result with { Moments = p.Moments.OrderBy(m => m.StartMs ?? 0).ThenBy(m => m.Page ?? 0).ToArray() }).ToArray();
+            var results = ordered.Skip(localOffset).Take(limit).Select(p => DecoratePersonResult(db, p.Result with { Moments = p.Moments.OrderBy(m => m.StartMs ?? 0).ThenBy(m => m.Page ?? 0).ToArray() }, personIds)).Where(r => r.Moments.Count > 0).ToArray();
             if (ambiguous.Count > 0) notice = $"Multiple people use the name {string.Join(", ", ambiguous.Distinct(StringComparer.OrdinalIgnoreCase))}. Select a person filter to resolve the name. " + notice;
-            if (results.Any(r => r.MatchCategory == MatchCategory.PossiblePersonAction)) notice = string.Join(" ", new[] { notice, "Person and scene evidence overlap in time. Identity plus action is a candidate match; the person's role is not verified." }.Where(s => s.Length > 0));
+            if (results.Any(r => r.MatchCategory == MatchCategory.PossiblePersonAction)) notice = string.Join(" ", new[] { notice, "A sampled face falls within this scene or passage. Check the face and surrounding footage: action, role and speaker are not verified." }.Where(s => s.Length > 0));
             return new SearchResponse { GenerationId = generation.GenerationId, Results = results, SemanticUsed = semanticUsed, NextCursor = ordered.Length > localOffset + limit ? MakeCursor(offset + limit, generation.GenerationId, query, request.Filters) : null, TotalCount = null, Notice = notice, ElapsedMilliseconds = watch.Elapsed.TotalMilliseconds, People = detected.Select(p => new PersonChip(p.Id, p.Name)).ToArray() };
         }
         finally { searchGate.Release(); }
@@ -210,14 +211,7 @@ public sealed partial class ArchiveService
         }
         if (filters.AfterUtc is DateTimeOffset after) { clauses.Add("f.modified >= $after"); values.Add(("$after", after.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))); }
         if (filters.BeforeUtc is DateTimeOffset before) { clauses.Add("f.modified <= $before"); values.Add(("$before", before.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))); }
-        for (int i = 0; i < people.Count; i++)
-        {
-            if (!overlay) { clauses.Add("0=1"); continue; }
-            string parameter = "$person" + i; values.Add((parameter, people[i].ToString("D")));
-            // Evidence must overlap the matching moment. Without shot-bounded face tracks,
-            // proximity is insufficient: adjacent shots may contain different people.
-            clauses.Add($"s.id IN (SELECT ms.id FROM usermeta.assignments a JOIN observations o ON o.id=a.observation_id JOIN segments os ON os.id=o.segment_id JOIN segments ms ON ms.file_id=os.file_id WHERE a.person_id={parameter} AND a.rejected=0 AND (a.confirmed=1 OR a.score>=0.55) AND (os.id=ms.id OR (ms.start_ms IS NOT NULL AND os.start_ms IS NOT NULL AND os.start_ms<COALESCE(ms.end_ms,ms.start_ms+1) AND COALESCE(os.end_ms,os.start_ms+1)>ms.start_ms)))");
-        }
+        if (people.Count > 0) clauses.Add(overlay ? PeoplePredicate(people, values) : "0=1");
         return (clauses.Count == 0 ? "1=1" : string.Join(" AND ", clauses), values);
     }
     private void AttachOverlay(SqliteConnection db)
@@ -274,15 +268,32 @@ public sealed partial class ArchiveService
         string path; FileKind kind;
         using (var reader = command.ExecuteReader()) { if (!reader.Read()) throw new FileNotFoundException("This item is not in the current archive generation."); path = reader.GetString(0); kind = (FileKind)reader.GetInt32(1); }
         string original = PortablePaths.Resolve(RootPath, path);
+        var personIds = request.PersonIds?.Distinct().ToArray() ?? [];
+        if (personIds.Length > 32) throw new ArgumentException("Choose at most 32 people in one preview.");
         var moments = new List<SearchMoment>();
         using (var segments = db.CreateCommand())
         {
-            segments.CommandText = "SELECT id,kind,text,start_ms,end_ms,page,thumbnail FROM segments WHERE file_id=$id ORDER BY CASE WHEN id=$selected THEN 0 ELSE 1 END,start_ms,page,id LIMIT 500;";
+            // The search response already supplies its matching rail. Inspecting one face
+            // must not issue hundreds of evidence lookups over an entire long recording.
+            segments.CommandText = "SELECT id,kind,text,start_ms,end_ms,page,thumbnail FROM segments WHERE file_id=$id " + (personIds.Length > 0 && request.SegmentId.HasValue ? "AND id=$selected " : "") + "ORDER BY CASE WHEN id=$selected THEN 0 ELSE 1 END,start_ms,page,id LIMIT 500;";
             segments.Parameters.AddWithValue("$id", request.FileId.ToString("D")); segments.Parameters.AddWithValue("$selected", request.SegmentId ?? -1);
             using var reader = segments.ExecuteReader(); while (reader.Read()) moments.Add(ReadMoment(reader, 0));
         }
+        if (personIds.Length > 0)
+        {
+            if (!File.Exists(storage.OverlayPath)) throw new FileNotFoundException("The selected person evidence is unavailable.");
+            AttachOverlay(db);
+            moments = moments.Select(m => DecoratePersonMoment(db, request.FileId, m, personIds)).Where(m => m.PersonEvidence.Count > 0).ToList();
+        }
         var selectedMoment = request.SegmentId is long id ? moments.FirstOrDefault(m => m.SegmentId == id) : moments.FirstOrDefault();
         if (request.SegmentId.HasValue && selectedMoment is null) throw new FileNotFoundException("That moment is unavailable in this generation.");
-        return new PreviewResult { FileId = request.FileId, OriginalPath = original, Kind = kind, Text = selectedMoment?.Text ?? "", StartMs = selectedMoment?.StartMs, Page = selectedMoment?.Page, Moments = moments };
+        var evidence = selectedMoment?.PersonEvidence ?? [];
+        if (request.EvidenceObservationId is long observation)
+        {
+            if (personIds.Length == 0 || selectedMoment is null) throw new ArgumentException("Select people to inspect face evidence.");
+            evidence = ReadPersonEvidence(db, request.FileId, selectedMoment, personIds, observation);
+            if (!evidence.Any(e => e.ObservationId == observation)) throw new FileNotFoundException("The selected face evidence is no longer accepted for this moment.");
+        }
+        return new PreviewResult { FileId = request.FileId, OriginalPath = original, Kind = kind, Text = selectedMoment?.Text ?? "", StartMs = evidence.FirstOrDefault()?.StartMs ?? selectedMoment?.StartMs, Page = selectedMoment?.Page, PersonEvidence = evidence, Moments = moments };
     }
 }

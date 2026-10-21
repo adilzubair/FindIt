@@ -14,6 +14,7 @@ public sealed partial class ContentProcessor : IContentProcessor
     private readonly FaceProcessor faces;
     private readonly SemaphoreSlim gate=new(1,1);
     public string FaceFingerprint => "yunet-8f2383e4-sface-0ba9fbfa-align112-l2-v1";
+    public string ExtractionFingerprint => "thorough-playback-pts-time-windows-conservative-eof-face-instants-v7";
     public ContentProcessor(RuntimePaths paths){this.paths=paths;media=new(paths,true);text=new(paths);faces=new(paths);}
     public IReadOnlyList<RuntimeCapability> Capabilities=>[
         new("semantic","Semantic search",text.Available,text.Available?"Gemma 2 Q8 text encoder, 512 dimensions.":"Embedding model or native runtime missing; run Fetch-Dependencies.ps1."),
@@ -116,47 +117,46 @@ public sealed partial class ContentProcessor : IContentProcessor
     private async IAsyncEnumerable<ExtractedSegment> VideoAsync(string path,string scratch,[EnumeratorCancellation]CancellationToken token)
     {
         var ffmpeg=paths.Tool("ffmpeg.exe")??throw new FileNotFoundException("FFmpeg is required to prepare videos.");
-        const int width=640,height=360;using var process=ProcessRunner.Start(ffmpeg,["-nostdin","-hide_banner","-loglevel","error","-i",path,"-an","-vf",$"fps=2,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2","-f","rawvideo","-pix_fmt","bgr24","pipe:1"],true);
-        using var registration=token.Register(()=>ProcessRunner.Kill(process));var diagnostic=ProcessRunner.ReadTailAsync(process.StandardError,token);
-        var pixels=new byte[width*height*3];long index=0;var rolling=new Queue<string>();
+        const int width=640,height=360;
+        var timeline=await MediaTimeline.ProbeAsync(paths.Tool("ffprobe.exe"),path,"v:0",token);
+        long visualIndex=0,nextVisual=0,lastFrameTime=0;
+        var windows=new VideoWindowScheduler();
         var cuts=new SceneChangeDetector();var cutPixels=new byte[32*18*3];using var cutThumbnail=new Mat();
-        try
+        await foreach(var decoded in VideoFrameReader.ReadAsync(ffmpeg,path,width,height,token))
         {
-            while(true)
-            {
-                var read=0;while(read<pixels.Length){var n=await process.StandardOutput.BaseStream.ReadAsync(pixels.AsMemory(read),token);if(n==0)break;read+=n;}
-                if(read==0)break;if(read!=pixels.Length)throw new InvalidDataException("Video decoder returned an incomplete frame.");
-                using var frame=Mat.FromPixelData(height,width,MatType.CV_8UC3,pixels);var observations=faces.Detect(frame);var time=index*500;
+                var time=lastFrameTime=decoded.StartMs;
+                using var frame=Mat.FromPixelData(height,width,MatType.CV_8UC3,decoded.Pixels);var observations=faces.Detect(frame);
                 Cv2.Resize(frame,cutThumbnail,new Size(32,18),0,0,InterpolationFlags.Area);
                 System.Runtime.InteropServices.Marshal.Copy(cutThumbnail.Data,cutPixels,0,cutPixels.Length);
                 bool sceneCut=cuts.Observe(cutPixels);
-                if(index%2==0)
+                // Finalize before adding this source frame, so half-open windows never
+                // encode a later shot or a sparse VFR sample outside their declared time.
+                foreach(var window in windows.Advance(time,sceneCut))
+                    yield return new(){Kind=SegmentKind.VideoClip,StartMs=window.StartMs,EndMs=window.EndMs,Embedding=await media.EmbedFramesAsync(window.Frames.Select(f=>f.Path).ToArray(),token)};
+                if(sceneCut)windows.Reset(time);
+                if(time>=nextVisual)
                 {
-                    var file=Path.Combine(scratch,$"frame-{index/2%8}.jpg");await File.WriteAllBytesAsync(file,Jpeg(frame,640),token);var vector=await media.EmbedMediaAsync(file,true,token);
-                    yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1000,ThumbnailJpeg=Jpeg(frame,384),Embedding=vector,Faces=observations};
+                    nextVisual=(time/1000+1)*1000;
+                    var file=Path.Combine(scratch,$"frame-{visualIndex++%8}.jpg");await File.WriteAllBytesAsync(file,Jpeg(frame,640),token);var vector=await media.EmbedMediaAsync(file,true,token);
+                    // A sampled image establishes presence at this instant; it does not
+                    // establish a person's presence for the following second or across a cut.
+                    yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Embedding=vector,Faces=observations};
                     if(vector is not null)
                     {
-                        rolling.Enqueue(file);if(rolling.Count>8)rolling.Dequeue();
-                        var second=index/2;
-                        if(rolling.Count==8&&(second-7)%4==0)
-                        {
-                            var clip=await media.EmbedFramesAsync(rolling.ToArray(),token);
-                            yield return new(){Kind=SegmentKind.VideoClip,StartMs=time-7000,EndMs=time+1000,Embedding=clip};
-                        }
+                        windows.Add(file,time);
                     }
                 }
                 else if(sceneCut)
                 {
-                    // Supplemental half-second samples never enter the one-Hz temporal queue.
+                    // Supplemental scene samples do not replace the regular temporal queue.
                     var file=Path.Combine(scratch,"scene-cut.jpg");await File.WriteAllBytesAsync(file,Jpeg(frame,640),token);
-                    yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+500,ThumbnailJpeg=Jpeg(frame,384),Embedding=await media.EmbedMediaAsync(file,true,token),Faces=observations};
+                    yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Embedding=await media.EmbedMediaAsync(file,true,token),Faces=observations};
                 }
-                else if(observations.Count>0)yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+500,Faces=observations};
-                index++;
-            }
-            await process.WaitForExitAsync(token);if(process.ExitCode!=0)throw new InvalidDataException("Video extraction failed: "+await diagnostic);
+                else if(observations.Count>0)yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Faces=observations};
         }
-        finally {ProcessRunner.Kill(process);}
+            long end=timeline.ResolveEnd(lastFrameTime);
+            foreach(var window in windows.Advance(end,true))
+                yield return new(){Kind=SegmentKind.VideoClip,StartMs=window.StartMs,EndMs=window.EndMs,Embedding=await media.EmbedFramesAsync(window.Frames.Select(f=>f.Path).ToArray(),token)};
     }
     private async Task<bool> HasAudioAsync(string path,CancellationToken token)
     {
@@ -166,6 +166,7 @@ public sealed partial class ContentProcessor : IContentProcessor
     private async IAsyncEnumerable<ExtractedSegment> AudioAsync(string path,string scratch,[EnumeratorCancellation]CancellationToken token)
     {
         var ffmpeg=paths.Tool("ffmpeg.exe")??throw new FileNotFoundException("FFmpeg is required to prepare audio.");
+        var timeline=await MediaTimeline.ProbeAsync(paths.Tool("ffprobe.exe"),path,"a:0",token);
         const int rate=16000,window=30*rate,hop=25*rate;using var process=ProcessRunner.Start(ffmpeg,["-nostdin","-hide_banner","-loglevel","error","-i",path,"-vn","-ac","1","-ar","16000","-f","s16le","pipe:1"],true);
         using var registration=token.Register(()=>ProcessRunner.Kill(process));var diagnostic=ProcessRunner.ReadTailAsync(process.StandardError,token);var samples=new byte[window*2];var occupied=0;long offset=0;
         try
@@ -176,7 +177,7 @@ public sealed partial class ContentProcessor : IContentProcessor
                 if(occupied<samples.Length&&read>0)continue;
                 if(occupied>rate*2 && (offset==0||occupied>(window-hop)*2))
                 {
-                    var wave=Path.Combine(scratch,"audio.wav");WriteWave(wave,samples,occupied,rate);var start=offset*1000/rate;var end=start+occupied*1000/(rate*2);
+                    var wave=Path.Combine(scratch,"audio.wav");WriteWave(wave,samples,occupied,rate);var start=timeline.StartMs+offset*1000/rate;var end=start+occupied*1000/(rate*2);
                     yield return new(){Kind=SegmentKind.Audio,StartMs=start,EndMs=end,Embedding=await media.EmbedMediaAsync(wave,false,token)};
                     foreach(var passage in await TranscribeAsync(wave,scratch,start,end-start,token))
                         yield return new(){Kind=SegmentKind.Transcript,StartMs=passage.StartMs,EndMs=passage.EndMs,Text=passage.Text,Embedding=await text.EmbedTextAsync(passage.Text,false,token)};

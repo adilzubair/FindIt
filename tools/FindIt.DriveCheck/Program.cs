@@ -14,14 +14,15 @@ internal static class Program
         string? Option(string name) { int index=Array.IndexOf(args,name);return index>=0&&index+1<args.Length?args[index+1]:null; }
         if(Option("--root") is not { } root||Option("--worker") is not { } worker||Option("--report") is not { } report)
         {
-            Console.Error.WriteLine("Usage: FindIt.DriveCheck --root D:\\ --worker D:\\FindIt\\app\\0.1.0-preview.3\\FindIt.Worker.exe --report <workspace-report.json> [--reader-only | --extras | --eject]");
+            Console.Error.WriteLine("Usage: FindIt.DriveCheck --root <archive-root> --worker <worker.exe> --report <report.json> [--reader-only | --extras | --eject | --people-media --fixtures <generated-media-folder>]");
             return 2;
         }
         try
         {
-            if(new[]{"--reader-only","--extras","--eject"}.Count(mode=>args.Contains(mode,StringComparer.Ordinal))>1)
+            if(new[]{"--reader-only","--extras","--eject","--people-media"}.Count(mode=>args.Contains(mode,StringComparer.Ordinal))>1)
                 throw new ArgumentException("Select only one validation mode per command.");
             if(args.Contains("--reader-only",StringComparer.Ordinal))return await new ReaderValidation(root,worker,report).RunAsync();
+            if(args.Contains("--people-media",StringComparer.Ordinal))return await new PeopleMediaValidation(root,worker,report,Option("--fixtures")??throw new ArgumentException("Provide --fixtures for native media validation.")).RunAsync();
             if(args.Contains("--eject",StringComparer.Ordinal))
             {
                 if(args.Contains("--extras",StringComparer.Ordinal))throw new ArgumentException("Run extras and final eject as separate commands.");
@@ -275,7 +276,7 @@ internal sealed class DriveValidation
         var frames=preview.Moments.Where(m=>m.Kind==SegmentKind.VideoFrame&&m.Thumbnail is not null).ToArray();
         var clips=preview.Moments.Where(m=>m.Kind==SegmentKind.VideoClip).ToArray();
         Check(frames.Length>=14,"Video lacks its ordinary one-frame-per-second visual coverage.");
-        Check(clips.Length>=2&&clips.All(m=>m.EndMs-m.StartMs==8000),"Video lacks the two expected eight-second temporal clips.");
+        Check(clips.Length==4&&clips.All(m=>WithinFixtureShot(m.StartMs!.Value,m.EndMs!.Value)),"Video must retain four short joint clips bounded by its actual scene cuts.");
         var visual=preview.Moments.Where(m=>m.Kind is SegmentKind.VideoFrame or SegmentKind.VideoClip).ToArray();
         Check(visual.All(m=>m.StartMs>=0&&m.EndMs>=m.StartMs&&m.EndMs<=14000),"Visual moments lie outside the actual 14-second source.");
         // AAC uses 1,024-sample frames at 16 kHz (64 ms); decoded tail padding is not visual coverage.
@@ -416,7 +417,8 @@ internal sealed class DriveValidation
             var resumeTimer=Stopwatch.StartNew();var resumed=await Client.PrepareAsync(Request(),new ProgressTrace("resume"),Token);resumeTimer.Stop();
             Check(resumed.FileCount==14&&resumed.Issues.Count==0,"Cancelled video did not prepare successfully on resume.");
             var copy=(await Search("resume-check.mp4",new(){ExactOnly=true})).Results.Single(r=>PathEquals(r.RelativePath,Resume));
-            Check((await Client.GetPreviewAsync(new(copy.FileId),Token)).Moments.Any(m=>m.Kind==SegmentKind.VideoClip),"Resumed video lacks its temporal clip records.");
+            var resumedClips=(await Client.GetPreviewAsync(new(copy.FileId),Token)).Moments.Where(m=>m.Kind==SegmentKind.VideoClip).ToArray();
+            Check(resumedClips.Length==4&&resumedClips.All(m=>WithinFixtureShot(m.StartMs!.Value,m.EndMs!.Value)),"Resumed video lacks its four short shot-bounded temporal clips.");
             DeleteOwned(path);var deleted=await Client.PrepareAsync(Request(),new ProgressTrace("remove-resume"),Token);
             Check(deleted.FileCount==13&&(await Search("resume-check.mp4",new(){ExactOnly=true})).Results.Count==0,"Deleted cancellation fixture remained searchable.");
             return new{cancelled,cancelAndCheckpointElapsedMilliseconds=cancelTimer.Elapsed.TotalMilliseconds,resumeElapsedMilliseconds=resumeTimer.Elapsed.TotalMilliseconds,progress=progress.Snapshot(),oldSearch=Summary(stillSearchable),resumedGeneration=resumed.GenerationId,finalGeneration=deleted.GenerationId};
@@ -469,6 +471,7 @@ internal sealed class DriveValidation
     private Task<SearchResponse> Search(string query,SearchFilters? filters=null)=>Client.SearchAsync(new(){Query=query,Filters=filters??new(),Limit=1000},Token);
     private static PreparationRequest Request(bool verify=false)=>new(){Folders=["Library"],OcrLanguages=["eng"],VerifyContents=verify};
     private static void Check(bool condition,string message){if(!condition)throw new ValidationException(message);}
+    internal static bool WithinFixtureShot(long start,long end)=>new[]{(0L,3500L),(3500L,6500L),(6500L,10500L),(10500L,14000L)}.Any(shot=>start>=shot.Item1&&end<=shot.Item2&&end>start);
     private static object ResultSummary(SearchResult r)=>new{r.RelativePath,r.Kind,r.MatchCategory,r.Score,r.Snippet,moments=r.Moments.Select(m=>new{m.Kind,m.StartMs,m.EndMs,m.Page})};
     private static object Summary(SearchResponse response)=>new{response.GenerationId,response.SemanticUsed,response.ElapsedMilliseconds,response.Notice,response.People,results=response.Results.Select(ResultSummary)};
     private static bool PathEquals(string a,string b)=>a.Replace('\\','/').Equals(b.Replace('\\','/'),StringComparison.OrdinalIgnoreCase);

@@ -6,11 +6,24 @@ internal static class ArchiveDatabase
 {
     public static SqliteConnection Open(string path, bool readOnly = false)
     {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate, Pooling = false }.ToString());
-        connection.Open();
-        Execute(connection, "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA cache_size=-32768;");
-        if (!readOnly) Execute(connection, "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-        return connection;
+        // The standard Windows VFS can reject an otherwise valid catalog path when
+        // its rollback-journal suffix crosses MAX_PATH. Keep SQLite's file locking
+        // while using its built-in long-path implementation, including ATTACHes.
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+            Vfs = OperatingSystem.IsWindows() ? "win32-longpath" : null
+        }.ToString());
+        try
+        {
+            connection.Open();
+            Execute(connection, "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA cache_size=-32768;");
+            if (!readOnly) Execute(connection, "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
+            return connection;
+        }
+        catch { connection.Dispose(); throw; }
     }
     public static void Execute(SqliteConnection db, string sql, params (string Name, object? Value)[] parameters)
     {

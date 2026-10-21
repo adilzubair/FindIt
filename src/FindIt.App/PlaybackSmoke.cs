@@ -43,7 +43,7 @@ public partial class MainWindow
             {
                 await Task.Delay(75, timeout.Token);
                 openStable = await _player.GetStateAsync(timeout.Token);
-                if (openStable.Playing || Math.Abs(openStable.PositionMs - opened.PositionMs) > 50) throw new IOException("The selected preview started playback without a play action.");
+                if (openStable.Playing || Math.Abs(openStable.PositionMs - opened.PositionMs) > 50) throw new IOException($"The selected preview moved before a play action: opened {opened.PositionMs}ms, observed {openStable.PositionMs}ms, playing={openStable.Playing}.");
             }
             await _player.SetVolumeAsync(0, timeout.Token);
             await _player.PauseAsync(timeout.Token); // The explicit Play action resumes the initially paused input.

@@ -157,6 +157,16 @@ public partial class MainWindow
                 new { panelTop = panelBounds.Top, panelBottom = panelBounds.Bottom, actionTop = actionBounds.Top, actionBottom = actionBounds.Bottom, mediaBottom = imageBounds.Bottom, scrollViewport = previewScroll.ViewportHeight, mediaHeight = PreviewMediaRow.ActualHeight });
             Check("media-controls-and-match-banner-scroll-outside-frame", previewScroll.IsAncestorOf(VideoControls) && previewScroll.IsAncestorOf(PossibleMatchBanner) && VideoPlayer.Visibility == Visibility.Collapsed && _player is null);
             LayoutCheck("compact-video-action-layout", QueryBox, PreviewPanel, PreviewBackButton, previewActions);
+            Width = 1366; Height = 768;
+            Notice("A sampled face falls within this scene. Check the surrounding footage: action, role and speaker are not verified.");
+            PersonEvidenceFaces.ItemsSource = new[] { new EvidenceFaceTile("Sample person", "00:00:06.500 · Confirmed membership", null) };
+            PersonEvidenceFaces.Visibility = Visibility.Visible;
+            ApplyResponsiveLayout(); await Idle();
+            Check("laptop-video-evidence-retains-usable-preview", PreviewMediaRow.ActualHeight >= 96 && previewScroll.ViewportHeight > 0 && Bounds(previewActions).Bottom <= Bounds(PreviewPanel).Bottom,
+                new { mediaHeight = PreviewMediaRow.ActualHeight, scrollViewport = previewScroll.ViewportHeight });
+            Check("face-evidence-crops-share-scroll-with-controls", previewScroll.IsAncestorOf(PersonEvidenceFaces));
+            PersonEvidenceFaces.Visibility = Visibility.Collapsed; PersonEvidenceFaces.ItemsSource = null; HideNotice(true);
+            Width = 880; Height = 520; ApplyResponsiveLayout(); await Idle();
             await Click(PreviewBackButton);
             Check("compact-back-restores-gallery", _selectedResult is null && Gallery.IsVisible && LibraryResultsPanel.IsVisible);
             LayoutCheck("compact-library-layout", QueryBox, SearchHeadingRow, AllTab, AudioTab, FiltersButton, Gallery, PaginationBar);

@@ -4,6 +4,15 @@ namespace FindIt.App;
 
 internal readonly record struct GalleryMetrics(int Columns, double TileWidth, double ThumbnailHeight, double RowExtent);
 
+internal static class ResultPreview
+{
+    public static PreviewRequest Request(SearchResult result, long? segmentId = null)
+    {
+        var moment = segmentId is long selected ? result.Moments.FirstOrDefault(m => m.SegmentId == selected) : result.Moments.FirstOrDefault();
+        return new(result.FileId, segmentId ?? moment?.SegmentId, moment?.PersonEvidence.FirstOrDefault()?.ObservationId, result.MatchedPersonIds);
+    }
+}
+
 internal static class GalleryLayout
 {
     internal const double Gap = 12;

@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private long? _searchGeneration;
     private bool _initialized, _searching, _statusPolling, _dark, _closing, _closed, _ejectRequested;
     private bool _noticePersistent;
+    private bool _showingPreparedFrame;
     private PreviewPlayerClient? _player;
     private readonly SemaphoreSlim _playbackGate = new(1);
     private readonly Dictionary<ResultTile, CancellationTokenSource> _thumbnailRequests = [];
@@ -101,7 +102,7 @@ public partial class MainWindow : Window
     {
         if (_preview?.Kind != FileKind.Video) return;
         // RenderTargetBitmap cannot capture a foreign HWND. Show the actual indexed frame in captures.
-        var frame = _preview.Moments.FirstOrDefault(m => m.StartMs == _preview.StartMs)?.Thumbnail ?? _selectedResult?.Thumbnail;
+        var frame = _preview.PersonEvidence.FirstOrDefault()?.Thumbnail ?? _preview.Moments.FirstOrDefault(m => m.StartMs == _preview.StartMs)?.Thumbnail ?? _selectedResult?.Thumbnail;
         PreviewImage.Source = await _thumbnails.ReadAsync(frame, CancellationToken.None);
         VideoPlayer.Visibility = Visibility.Collapsed;
         FooterStatus.Text += " · Video surface shown as its indexed frame";
@@ -304,16 +305,39 @@ public partial class MainWindow : Window
         PreviewPanel.Visibility = Visibility.Visible; ApplyResponsiveLayout(); UpdateLayout();
         PreviewDetails.Text = $"{result.Kind} · {FormatBytes(result.Bytes)} · {result.ModifiedUtc.ToLocalTime():dd MMM yyyy}";
         PossibleMatchBanner.Visibility = result.MatchCategory == MatchCategory.PossiblePersonAction ? Visibility.Visible : Visibility.Collapsed;
+        PersonEvidenceDetails.Visibility = Visibility.Collapsed;
+        PersonEvidenceFaces.Visibility = Visibility.Collapsed; PersonEvidenceFaces.ItemsSource = null;
+        EvidencePortrait.Source = null; EvidencePortrait.Visibility = Visibility.Collapsed;
         try
         {
-            var preview = await _backend.GetPreviewAsync(new(result.FileId, segmentId), cancellation.Token);
+            var preview = await _backend.GetPreviewAsync(ResultPreview.Request(result, segmentId), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested(); _preview = preview;
             PreviewText.Text = string.IsNullOrWhiteSpace(preview.Text) ? result.Snippet : preview.Text;
             PreviewText.Visibility = string.IsNullOrWhiteSpace(PreviewText.Text) ? Visibility.Collapsed : Visibility.Visible;
-            var moments = preview.Moments.Count > 0 ? preview.Moments : result.Moments;
+            var moments = result.MatchedPersonIds.Count > 0 ? result.Moments : preview.Moments.Count > 0 ? preview.Moments : result.Moments;
             var showMoments = moments.Count > 1 || result.Kind is FileKind.Video or FileKind.Audio;
             MomentsList.ItemsSource = showMoments ? moments : [];
             MomentsHeading.Visibility = showMoments ? Visibility.Visible : Visibility.Collapsed;
+            if (preview.PersonEvidence.Count > 0)
+            {
+                var time = preview.PersonEvidence[0].StartMs;
+                PersonEvidenceDetails.Text = "Face evidence: " + string.Join(", ", preview.PersonEvidence.Select(e => e.Name).Distinct()) + (time is long at ? $" at {TimeSpan.FromMilliseconds(at):hh\\:mm\\:ss\\.fff}" : "") + ". A sampled face does not verify an action or the speaker.";
+                PersonEvidenceDetails.Visibility = Visibility.Visible;
+                var faceTiles = new List<EvidenceFaceTile>();
+                foreach (var evidence in preview.PersonEvidence)
+                {
+                    var portrait = await _thumbnails.ReadAsync(evidence.Portrait, cancellation.Token);
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    var timestamp = evidence.StartMs is long sample ? $"{TimeSpan.FromMilliseconds(sample):hh\\:mm\\:ss\\.fff} · " : "";
+                    faceTiles.Add(new(evidence.Name, timestamp + (evidence.Confirmed ? "Confirmed membership" : "Suggested membership"), portrait));
+                }
+                PersonEvidenceFaces.ItemsSource = faceTiles; PersonEvidenceFaces.Visibility = Visibility.Visible;
+                if (faceTiles.FirstOrDefault() is { Portrait: not null } firstFace)
+                {
+                    EvidencePortrait.Source = firstFace.Portrait; EvidencePortrait.Visibility = Visibility.Visible;
+                    EvidencePortrait.ToolTip = firstFace.AccessibleName; AutomationProperties.SetName(EvidencePortrait, firstFace.AccessibleName);
+                }
+            }
             if (preview.Kind == FileKind.Image || preview.Kind == FileKind.Document)
             {
                 var bitmap = await LoadImageFileAsync(preview.PreviewPath ?? (preview.Kind == FileKind.Image ? preview.OriginalPath : null), cancellation.Token);
@@ -352,10 +376,16 @@ public partial class MainWindow : Window
         {
             token.ThrowIfCancellationRequested();
             var audioOnly = preview.Kind == FileKind.Audio;
+            var context = preview.PersonEvidence.FirstOrDefault()?.Thumbnail;
+            var poster = audioOnly ? null : await _thumbnails.ReadAsync(context, token);
+            token.ThrowIfCancellationRequested();
+            _showingPreparedFrame = poster is not null;
+            PreviewImage.Source = poster;
+            PreviewImage.ToolTip = _showingPreparedFrame ? "Sampled face frame. Play or seek to view surrounding footage." : null;
             VideoPlayer.Width = VideoPlayer.Height = audioOnly ? 1 : double.NaN;
             VideoPlayer.HorizontalAlignment = audioOnly ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
             VideoPlayer.VerticalAlignment = audioOnly ? VerticalAlignment.Top : VerticalAlignment.Stretch;
-            VideoPlayer.Visibility = Visibility.Visible; VideoControls.Visibility = Visibility.Visible;
+            VideoPlayer.Visibility = _showingPreparedFrame ? Visibility.Hidden : Visibility.Visible; VideoControls.Visibility = Visibility.Visible;
             PreviewPlaceholder.Text = audioOnly ? "♪\nAudio preview" : "Loading preview…";
             PreviewPlaceholder.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
             VideoPlayer.UpdateLayout();
@@ -372,8 +402,13 @@ public partial class MainWindow : Window
         }
         finally { _playbackGate.Release(); }
     }
-    private void StopPlayback() { StopPlaybackPolling(); _ = StopPlaybackAsync(); VideoPlayer.Visibility = Visibility.Collapsed; VideoControls.Visibility = Visibility.Collapsed; }
-    private async void PlayPauseClick(object sender, RoutedEventArgs e) { if (_player is null) return; try { await _player.PauseAsync(); } catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); } }
+    private void StopPlayback() { _showingPreparedFrame = false; StopPlaybackPolling(); _ = StopPlaybackAsync(); VideoPlayer.Visibility = Visibility.Collapsed; VideoControls.Visibility = Visibility.Collapsed; }
+    private void ShowDecodedVideo()
+    {
+        if (!_showingPreparedFrame || _preview?.Kind != FileKind.Video) return;
+        _showingPreparedFrame = false; PreviewImage.Source = null; PreviewImage.ToolTip = null; VideoPlayer.Visibility = Visibility.Visible;
+    }
+    private async void PlayPauseClick(object sender, RoutedEventArgs e) { if (_player is null) return; try { await _player.PauseAsync(); ShowDecodedVideo(); } catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); } }
     private async void MomentClick(object sender, RoutedEventArgs e) { if (_selectedResult is not null && (sender as FrameworkElement)?.Tag is SearchMoment moment) await SelectResultAsync(_selectedResult, moment.SegmentId); }
     private void ClosePreviewClick(object sender, RoutedEventArgs e) => ClosePreview(true);
     private void ClosePreview(bool restoreFocus = false) { _previewCancellation?.Cancel(); StopPlayback(); _preview = null; _selectedResult = null; MetadataList.SelectedItem = null; foreach (var tile in CurrentTiles) tile.IsSelected = false; ApplyResponsiveLayout(); ArrangeRows(true); if (restoreFocus) RestoreResultFocus(); }

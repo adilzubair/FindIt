@@ -28,7 +28,7 @@ public sealed class TemporalPeopleTests
         foreach (string activity in new[] { "cycling", "dog", "driving" })
         {
             var response = await service.SearchAsync(new() { Query = "Sam " + activity, Filters = new() { ExactOnly = true } });
-            Assert.AreEqual(0, response.Results.Count, $"Face evidence at6500–7000 must not be joined to the distinct {activity} moment.");
+            Assert.AreEqual(0, response.Results.Count, $"A face sampled at6500 must not be joined to the distinct {activity} moment.");
         }
         var direct = await service.SearchAsync(new() { Query = "Sam waving", Filters = new() { ExactOnly = true } });
         Assert.AreEqual(1, direct.Results.Count); Assert.AreEqual(6500L, direct.Results[0].Moments.Single().StartMs);
@@ -36,7 +36,7 @@ public sealed class TemporalPeopleTests
 
         var overlapping = await service.SearchAsync(new() { Query = "Sam greeting", Filters = new() { ExactOnly = true } });
         Assert.AreEqual(1, overlapping.Results.Count); var moment = overlapping.Results[0].Moments.Single();
-        Assert.AreEqual(SegmentKind.Transcript, moment.Kind); Assert.AreEqual(6750L, moment.StartMs); Assert.AreEqual(6900L, moment.EndMs);
+        Assert.AreEqual(SegmentKind.Transcript, moment.Kind); Assert.AreEqual(6500L, moment.StartMs); Assert.AreEqual(6900L, moment.EndMs);
 
         var explicitFilter = await service.SearchAsync(new() { Query = "dog", Filters = new() { ExactOnly = true, PersonIds = [named.Id] } });
         Assert.AreEqual(0, explicitFilter.Results.Count, "Explicit person filters must use the same temporal constraint as names in queries.");
@@ -73,7 +73,7 @@ public sealed class TemporalPeopleTests
             yield return new() { Kind = SegmentKind.VideoFrame, Text = "cycling", StartMs = 5000, EndMs = 6000 };
             yield return new() { Kind = SegmentKind.VideoFrame, Text = "dog", StartMs = 6000, EndMs = 6500 };
             yield return new() { Kind = SegmentKind.VideoFrame, Text = "waving", StartMs = 6500, EndMs = 7000, Faces = [face] };
-            yield return new() { Kind = SegmentKind.Transcript, Text = "greeting", StartMs = 6750, EndMs = 6900 };
+            yield return new() { Kind = SegmentKind.Transcript, Text = "greeting", StartMs = 6500, EndMs = 6900 };
             yield return new() { Kind = SegmentKind.VideoFrame, Text = "driving", StartMs = 7000, EndMs = 7500 };
         }
         public Task<IReadOnlyList<DetectedFace>> DetectReferenceFacesAsync(string absolutePath, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<DetectedFace>>([]);

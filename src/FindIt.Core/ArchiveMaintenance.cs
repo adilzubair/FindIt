@@ -54,7 +54,7 @@ public sealed partial class ArchiveService
     }
 
     /// <summary>Only app-owned artifacts are collected. Originals and models are never candidates.</summary>
-    private async Task CollectUnreferencedAsync(CancellationToken cancellationToken)
+    private async Task CollectUnreferencedAsync(GenerationManifest published, GenerationManifest? previousValid, CancellationToken cancellationToken)
     {
         var generations = Path.Combine(storage.Home, "generations");
         var manifests = new List<(string Directory, GenerationManifest Manifest)>();
@@ -69,9 +69,13 @@ public sealed partial class ArchiveService
             }
             catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
         }
-        var protectedFiles = manifests.Take(2).SelectMany(m => m.Manifest.Artifacts.Select(a => a.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var current in manifests.Take(2)) protectedFiles.Add(storage.Relative(Path.Combine(current.Directory, "manifest.json")));
-        var protectedDirectories = manifests.Take(2).Select(m => m.Directory).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Parseable manifests are not necessarily healthy generations. Retain the
+        // snapshot just published and the prior snapshot Recovery actually verified,
+        // rather than a newer corrupt catalog that happened to deserialize.
+        var retained = previousValid is null ? new[] { published } : new[] { published, previousValid };
+        var protectedFiles = retained.SelectMany(m => m.Artifacts.Select(a => a.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var protectedDirectories = retained.Select(m => storage.GenerationDirectory(m.GenerationId)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var current in retained) protectedFiles.Add(storage.Relative(Path.Combine(storage.GenerationDirectory(current.GenerationId), "manifest.json")));
         foreach (var path in protectedFiles)
         {
             var absolute = PortablePaths.Resolve(RootPath, path, true, false);
@@ -125,6 +129,36 @@ public sealed partial class ArchiveService
                 Directory.Delete(absolute, true);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        // Hard termination skips PublishCheckpointAsync's finally. Only the exclusive
+        // preparer calls collection, after publication has moved its own snapshot.
+        var checkpoints = Path.Combine(storage.Home, "checkpoints");
+        if (Directory.Exists(checkpoints))
+        {
+            PortablePaths.RejectLinks(RootPath, checkpoints);
+            foreach (var abandoned in Directory.EnumerateDirectories(checkpoints, "snapshot-*"))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!Guid.TryParseExact(Path.GetFileName(abandoned)["snapshot-".Length..], "N", out _)) continue;
+                try
+                {
+                    var absolute = Path.GetFullPath(abandoned);
+                    if (!PortablePaths.IsWithin(checkpoints, absolute)) throw new IOException("Unsafe checkpoint collection path.");
+                    PortablePaths.RejectLinks(RootPath, absolute);
+                    Directory.Delete(absolute, true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        foreach (var (directory, name) in new[] { (storage.Home, "current.json"), (storage.StagePath, "state.json") })
+        {
+            if (!Directory.Exists(directory)) continue;
+            foreach (var temporary in Directory.EnumerateFiles(directory, name + ".new-*"))
+            {
+                if (!Guid.TryParseExact(Path.GetFileName(temporary)[(name.Length + ".new-".Length)..], "N", out _)) continue;
+                try { PortablePaths.RejectLinks(RootPath, temporary); File.Delete(temporary); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
         }
     }
 }

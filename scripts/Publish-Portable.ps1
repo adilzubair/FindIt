@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.1.0-preview.1',
+    [string]$Version = '0.1.0-preview.4',
     [string]$OutputDirectory,
     [string]$BuildArtifactsPath,
     [switch]$SkipBuild,
@@ -9,6 +9,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
+if ($env:FindItEnableFaultInjection -eq 'true') { throw 'Fault-injection builds are for workspace validation only. Clear FindItEnableFaultInjection before publishing.' }
 if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $Version.Contains('..')) { throw 'Invalid version.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRoot 'artifacts/portable' }
 $taskOutput = [IO.Path]::GetFullPath($OutputDirectory)
@@ -17,11 +18,15 @@ Push-Location $taskRoot
 try {
     $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'; $env:MSBuildEnableWorkloadResolver = 'false'
     $env:DOTNET_CLI_HOME = Join-Path $taskRoot '.tools/dotnet-home'
-    if (-not $SkipBuild) { & "$PSScriptRoot/Build.ps1" -Configuration Release }
+    if (-not $SkipBuild) {
+        $taskBuildArguments = @{ Configuration = 'Release' }
+        if ($BuildArtifactsPath) { $taskBuildArguments.BuildArtifactsPath = $BuildArtifactsPath }
+        & "$PSScriptRoot/Build.ps1" @taskBuildArguments
+    }
     $taskApp = Join-Path $taskOutput "FindIt/app/$Version"
     New-Item -ItemType Directory -Force $taskApp | Out-Null
     foreach ($taskProject in @('FindIt.App','FindIt.Worker')) {
-        $taskPublishArguments = @('publish', "src/$taskProject/$taskProject.csproj", '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false', '-p:PublishTrimmed=false', '-p:RuntimeFrameworkVersion=10.0.13', '-o', $taskApp, '-m:1', '--disable-build-servers')
+        $taskPublishArguments = @('publish', "src/$taskProject/$taskProject.csproj", '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false', '-p:PublishTrimmed=false', '-p:RuntimeFrameworkVersion=10.0.13', '-p:FindItEnableFaultInjection=false', '-o', $taskApp, '-m:1', '--disable-build-servers')
         if ($BuildArtifactsPath) { $taskPublishArguments += @('--artifacts-path', [IO.Path]::GetFullPath($BuildArtifactsPath)) }
         & dotnet @taskPublishArguments
         if ($LASTEXITCODE) { throw "Publishing $taskProject failed." }

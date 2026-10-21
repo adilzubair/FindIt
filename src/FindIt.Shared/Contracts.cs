@@ -73,6 +73,21 @@ public sealed record SearchMoment
     public string Label { get; init; } = "";
     public string Text { get; init; } = "";
     public BlobReference? Thumbnail { get; init; }
+    // Face observations are samples, not proof of continuous presence or an action.
+    public IReadOnlyList<PersonEvidence> PersonEvidence { get; init; } = [];
+}
+
+public sealed record PersonEvidence
+{
+    public Guid PersonId { get; init; }
+    public string Name { get; init; } = "";
+    public long ObservationId { get; init; }
+    public long SegmentId { get; init; }
+    public long? StartMs { get; init; }
+    public BlobReference? Thumbnail { get; init; }
+    public BlobReference? Portrait { get; init; }
+    public double Quality { get; init; }
+    public bool Confirmed { get; init; }
 }
 
 public sealed record SearchResult
@@ -89,6 +104,7 @@ public sealed record SearchResult
     public double Score { get; init; }
     public IReadOnlyList<SearchMoment> Moments { get; init; } = [];
     public IReadOnlyList<string> MatchingPeople { get; init; } = [];
+    public IReadOnlyList<Guid> MatchedPersonIds { get; init; } = [];
 }
 
 public sealed record SearchResponse
@@ -159,7 +175,7 @@ public sealed record PersonObservation
     public bool Rejected { get; init; }
 }
 
-public sealed record PreviewRequest(Guid FileId, long? SegmentId = null);
+public sealed record PreviewRequest(Guid FileId, long? SegmentId = null, long? EvidenceObservationId = null, IReadOnlyList<Guid>? PersonIds = null);
 public sealed record PlaybackRequest(string Path, long WindowHandle, long StartMs = 0, bool AutoPlay = true);
 public sealed record PlaybackState(bool Playing, long PositionMs, long DurationMs);
 public sealed record WorkerDiagnostics(int ProcessId, long PrivateBytes, long WorkingSetBytes, long PeakWorkingSetBytes, double CpuMilliseconds);
@@ -172,6 +188,7 @@ public sealed record PreviewResult
     public string Text { get; init; } = "";
     public long? StartMs { get; init; }
     public int? Page { get; init; }
+    public IReadOnlyList<PersonEvidence> PersonEvidence { get; init; } = [];
     public IReadOnlyList<SearchMoment> Moments { get; init; } = [];
 }
 
@@ -213,6 +230,7 @@ public interface IContentProcessor : IAsyncDisposable
 {
     IReadOnlyList<RuntimeCapability> Capabilities { get; }
     string FaceFingerprint { get; }
+    string ExtractionFingerprint => "content-v1";
     IAsyncEnumerable<ExtractedSegment> ExtractAsync(string absolutePath, FileKind kind, PreparationRequest options, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<DetectedFace>> DetectReferenceFacesAsync(string absolutePath, CancellationToken cancellationToken = default);
 }

@@ -9,6 +9,7 @@ internal static class ArchiveSpace
     public static void EnsureAvailable(string root,long additionalNeeded=0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(additionalNeeded);
+        PreparationFaults.Hit(root,"space.preflight");
         var drive=new DriveInfo(Path.GetPathRoot(Path.GetFullPath(root))!);
         long available=drive.AvailableFreeSpace;
         if(available<Reserve||additionalNeeded>available-Reserve)

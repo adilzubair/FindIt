@@ -63,7 +63,7 @@ public sealed partial class ArchiveService : IArchiveBackend
             var previous = await storage.RecoverAsync(cancellationToken);
             if (previous is not null && request.VerifyContents) await storage.VerifyAllAsync(previous, cancellationToken);
             var scopes = NormalizeScopes(request.Folders);
-            string extractionFingerprint = ArchiveStorage.HashText(JsonSerializer.Serialize(new { version = 2, face = FaceFingerprint, capabilities = processor.Capabilities.Where(c=>c.Id!="gpu").OrderBy(c => c.Id).Select(c=>new { c.Id,c.Available }).ToArray(), languages = request.OcrLanguages.Order().ToArray() }, WireJson.Options));
+            string extractionFingerprint = ArchiveStorage.HashText(JsonSerializer.Serialize(new { version = 2, extraction = processor.ExtractionFingerprint, face = FaceFingerprint, capabilities = processor.Capabilities.Where(c=>c.Id!="gpu").OrderBy(c => c.Id).Select(c=>new { c.Id,c.Available }).ToArray(), languages = request.OcrLanguages.Order().ToArray() }, WireJson.Options));
             string settings = ArchiveStorage.HashText(JsonSerializer.Serialize(new { folders = scopes, request.VerifyContents, extractionFingerprint }, WireJson.Options));
             StageState? state = null;
             var statePath = Path.Combine(storage.StagePath, "state.json");
@@ -87,8 +87,6 @@ public sealed partial class ArchiveService : IArchiveBackend
                 if (previous is not null) { using var source = ArchiveDatabase.Open(storage.CatalogPath(previous), true); source.BackupDatabase(stage); }
                 ArchiveDatabase.InitializeCatalog(stage);
                 ArchiveDatabase.Execute(stage, "UPDATE files SET seen=1; DELETE FROM completed; DELETE FROM issues;");
-                foreach (var scope in scopes)
-                    ArchiveDatabase.Execute(stage, "UPDATE files SET seen=0 WHERE $root=1 OR path=$path COLLATE NOCASE OR path LIKE $prefix ESCAPE '\\';", ("$root", scope == "." ? 1 : 0), ("$path", scope), ("$prefix", EscapeLike(scope) + "/%"));
                 // Embeddings from another encoder are never compared to this query model.
                 if (previous is not null && previous.EmbeddingFingerprint != embeddings.Fingerprint)
                     ArchiveDatabase.Execute(stage, "UPDATE segments SET vector_path=NULL,vector_offset=NULL,vector_length=NULL;");
@@ -96,8 +94,24 @@ public sealed partial class ArchiveService : IArchiveBackend
                     ArchiveDatabase.Execute(stage, "DELETE FROM observations; DELETE FROM completed; UPDATE files SET hash='';");
                 await ArchiveStorage.WriteAtomicAsync(statePath, JsonSerializer.Serialize(state, WireJson.Options), cancellationToken);
             }
+            else if (Directory.Exists(storage.GenerationDirectory(state.GenerationId)))
+            {
+                // A checkpoint may already have moved its sealed snapshot, while
+                // a killed worker never advanced this resumable state's writable
+                // tails. Keep the catalog/reuse markers, but never reopen packs
+                // referenced by that immutable generation for appending.
+                long existing = Directory.EnumerateDirectories(Path.Combine(storage.Home, "generations")).Select(p => long.TryParse(Path.GetFileName(p), out var id) ? id : 0).DefaultIfEmpty().Max();
+                var suffix = Guid.NewGuid().ToString("N");
+                state = state with { GenerationId = checked(existing + 1), ThumbnailPack = $"FindIt/archive/packs/thumbnails-{suffix}.pack", VectorPack = $"FindIt/archive/packs/vectors-{suffix}.pack" };
+                await ArchiveStorage.WriteAtomicAsync(statePath, JsonSerializer.Serialize(state, WireJson.Options), cancellationToken);
+            }
             using var db = ArchiveDatabase.Open(Path.Combine(storage.StagePath, "catalog.sqlite"));
             ArchiveDatabase.InitializeCatalog(db);
+            // Reconcile against this attempt's directory walk. A source processed
+            // before an interruption may have been removed before Resume.
+            foreach (var scope in scopes)
+                ArchiveDatabase.Execute(db, "UPDATE files SET seen=0 WHERE $root=1 OR path=$path COLLATE NOCASE OR path LIKE $prefix ESCAPE '\\';", ("$root", scope == "." ? 1 : 0), ("$path", scope), ("$prefix", EscapeLike(scope) + "/%"));
+            ArchiveDatabase.Execute(db, "DELETE FROM issues;");
             using (var thumbnails = new PackWriter(RootPath, state.ThumbnailPack))
             using (var vectors = new PackWriter(RootPath, state.VectorPack))
             {
@@ -166,6 +180,7 @@ public sealed partial class ArchiveService : IArchiveBackend
                                 BlobReference? vectorReference = encoded is null ? null : vectors.Append(encoded);
                                 BlobReference? thumbnail = segment.ThumbnailJpeg is { Length: > 0 } ? thumbnails.Append(segment.ThumbnailJpeg) : null;
                                 InsertSegment(db, fileId, relative, segment, thumbnail, vectorReference, thumbnails);
+                                PreparationFaults.Hit(RootPath, "file.segment-written");
                                 emitted++; segmentCount++;
                             }
                             if (emitted == 0) { InsertSegment(db, fileId, relative, new ExtractedSegment { Kind = SegmentKind.Text }, null, null, thumbnails); segmentCount++; }
@@ -191,6 +206,9 @@ public sealed partial class ArchiveService : IArchiveBackend
                             }
                             throw;
                         }
+                        // This boundary is outside the transaction rollback scope:
+                        // committed references must never have their packs truncated.
+                        PreparationFaults.Hit(RootPath, "file.committed");
                         }
                     }
                     catch (Exception error) when (error is not OperationCanceledException && error is not OutOfMemoryException && error is not ArchiveSpaceException)
@@ -231,6 +249,9 @@ public sealed partial class ArchiveService : IArchiveBackend
             }
             cancellationToken.ThrowIfCancellationRequested();
             ArchiveDatabase.Execute(db, "DELETE FROM files WHERE seen=0; DELETE FROM search_fts WHERE file_id NOT IN (SELECT id FROM files); DELETE FROM completed;");
+            // An interrupted checkpoint may have moved a complete generation before
+            // advancing its pointer/state. Resume must never reuse that directory ID.
+            while (Directory.Exists(storage.GenerationDirectory(state.GenerationId))) state = state with { GenerationId = checked(state.GenerationId + 1) };
             await PublishSnapshotAsync(db, state, previous, Report, cancellationToken);
             Report(PreparationStage.Completed, "", failed == 0 ? "This drive is prepared for offline search." : $"Preparation completed with {failed} item(s) needing attention.");
             preparing = false;

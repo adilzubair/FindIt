@@ -84,7 +84,7 @@ public sealed partial class ArchiveService
         }
         var manifest = new GenerationManifest { LibraryId = state.LibraryId, GenerationId = state.GenerationId, PreparedUtc = DateTimeOffset.UtcNow, EmbeddingFingerprint = embeddings.Fingerprint, FaceFingerprint = FaceFingerprint, VectorCount = vectorCount, VectorPacks = vectorPacks, Artifacts = artifacts, FileCount = kindCounts.Sum(k => k.Count), SegmentCount = totalSegments, TotalBytes = totalBytes, Kinds = kindCounts, Folders = folderCounts, Issues = issueList, SemanticBasePath = semantic.BasePath, SemanticDeltaPath = semantic.DeltaPath, BaseVectorCount = semantic.BaseCount, BaseVectorPacks = semantic.BasePacks };
         await storage.PublishAsync(manifest, cancellationToken, publicationFolder);
-        await CollectUnreferencedAsync(cancellationToken);
+        await CollectUnreferencedAsync(manifest, previous, cancellationToken);
         return manifest;
     }
 }

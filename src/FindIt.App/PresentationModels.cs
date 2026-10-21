@@ -29,12 +29,16 @@ public sealed class ResultTile : INotifyPropertyChanged
     public Visibility GlyphVisibility => Thumbnail is not null || HasTextPreview ? Visibility.Collapsed : Visibility.Visible;
     public string DateLabel => Result.ModifiedUtc.ToLocalTime().ToString("dd MMM yyyy");
     public string AccessibleName => $"{Result.Name}, {KindLabel}, {Result.RelativePath}. Open preview.";
-    public string Subtitle => Result.MatchCategory == MatchCategory.PossiblePersonAction ? "Possible person/action match" : Result.Moments.FirstOrDefault()?.StartMs is long time ? $"{TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss} · {Result.Moments.Count} matching {(Result.Moments.Count == 1 ? "moment" : "moments")}" : $"{KindLabel} · {DateLabel}";
+    public string Subtitle => Result.MatchCategory == MatchCategory.PossiblePersonAction ? "Possible person/action match" : (Result.Moments.FirstOrDefault()?.PersonEvidence.FirstOrDefault()?.StartMs ?? Result.Moments.FirstOrDefault()?.StartMs) is long time ? $"{TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss} · {Result.Moments.Count} matching {(Result.Moments.Count == 1 ? "moment" : "moments")}" : $"{KindLabel} · {DateLabel}";
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }
 
 public sealed record ResultRow(IReadOnlyList<ResultTile> Tiles);
+public sealed record EvidenceFaceTile(string Name, string Detail, BitmapSource? Portrait)
+{
+    public string AccessibleName => $"{Name}. {Detail}. Sampled face evidence.";
+}
 public sealed record FolderChoice(string Label, string? Path);
 public sealed class TextPresenceConverter : IValueConverter
 {

@@ -14,7 +14,7 @@ The reader opens the text backbone on demand, keeps compatible query encoding re
 FindIt.exe
 FindIt/
   app/current.txt
-  app/0.1.0-preview.1/       self-contained application and native tools
+  app/0.1.0-preview.4/       self-contained application and native tools
   models/                   hash-verified model artifacts
   archive/
     current.json            checksummed pointer to a complete generation
@@ -33,6 +33,8 @@ Each original is prepared inside a SQLite transaction. Payload packs are flushed
 
 Preparation never mutates a published catalog or appends to published packs. Publication writes a complete catalog, canonical vector-record table and derived ANN files, checks integrity, hashes artifacts, closes SQLite, moves the snapshot, then changes the pointer. SQLite uses a rollback journal, so published generations have no missing WAL dependency. Recovery validates the pointer and required artifacts, falling back to previous complete generations after corruption or interruption.
 
+On Windows, SQLite connections use its built-in `win32-longpath` VFS, including attached databases, so catalog paths and journal suffixes can exceed MAX_PATH while retaining file locking. Atomic publication retries temporary Windows sharing/access failures with bounded cancellable delays and removes only its own failed temporary file. Writer-locked maintenance collects abandoned checkpoint directories without changing retained generations.
+
 Canonical records contain segment ID, pack ordinal and byte offset. Vectors are FP16, normalized after truncation to 512 dimensions. Derived USearch HNSW indexes use cosine distance, FP16 nodes, connectivity 16 and search expansion 128. Compatible updates retain one base plus one current delta; changes reaching 10% of the base or 100,000 records trigger compaction. A live-ID filter removes tombstones from the retained base. Collection protects current/previous generation references, referenced older base indexes, active work, and user portraits. Originals and model files are never collection candidates.
 
 The C ABI uses opaque handles and error/status returns. Exceptions are caught within the native boundary. Native buffers have explicit ownership. Cancellation is observed during inference and in bounded managed loops.
@@ -43,7 +45,9 @@ Filename, path, and text use SQLite FTS5 plus literal path matching. Semantic qu
 
 Type/folder/date/people constraints are applied during candidate retrieval. Small filtered sets use canonical exact cosine search; larger sets use USearch's filtered search. Base and delta results merge by distance, then lexical and semantic rankings fuse using reciprocal rank fusion. Files group their strongest matching segments. Semantic scores are not shown as probability percentages.
 
-Face vectors remain separate from scene vectors. Names and explicit corrections live in the overlay and do not require scene re-embedding. Unknown faces are clustered conservatively, uncertain memberships remain reviewable, and rejected memberships remain excluded. People queries join face evidence to overlapping segment intervals rather than to an entire video. Candidate results never verify whether a visible person is driving, riding, or performing another role.
+Face vectors remain separate from scene vectors. Names and explicit corrections live in the overlay and do not require scene re-embedding. Unknown faces are clustered conservatively, uncertain memberships remain reviewable, and rejected memberships remain excluded. People queries use each observation's sampled timestamp, including when reading older catalogs with broad face intervals. Multiple people must occur in the same sampled image. Search results carry the context frame, portrait, and observation ID; preview validates current membership before opening that exact timestamp. Candidate results never verify whether a visible person is driving, riding, or performing another role.
+
+Video extraction compares small decoded active-picture thumbnails to detect scene cuts. New samples represent instants; temporal embeddings use eight-second windows with four-second overlap within a detected shot and shorter tails when at least two regular frames are available. Frames from different detected shots never enter the same joint encoding. Cut detection and finite sampling cannot guarantee all edits or appearances are found. Extraction policy is fingerprinted independently of the encoder; only an explicit preparation applies a changed policy to existing files.
 
 ## Interface and bounds
 

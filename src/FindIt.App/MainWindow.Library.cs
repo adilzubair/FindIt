@@ -175,7 +175,7 @@ public partial class MainWindow
         PaginationBar.Visibility = detailOnly || _status.FileCount == 0 ? Visibility.Collapsed : Visibility.Visible;
         var timedMedia = _preview?.Kind is FileKind.Video or FileKind.Audio;
         var mediaHeight = timedMedia
-            ? Math.Min(ActualHeight < 650 ? 72 : ActualHeight < 820 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 330))
+            ? Math.Min(ActualHeight < 650 ? 72 : ActualHeight < 820 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - (ActualHeight < 650 ? 330 : 240)))
             : Math.Min(ActualHeight < 650 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 192));
         PreviewMediaRow.Height = new GridLength(_preview?.Kind == FileKind.Document && PreviewImage.Source is null ? 0 : mediaHeight);
         MomentsHeading.Margin = timedMedia && ActualHeight < 820 ? new Thickness(0, 8, 0, 8) : new Thickness(0, 16, 0, 12);
@@ -286,7 +286,7 @@ public partial class MainWindow
     private async Task SeekToSliderAsync()
     {
         if (_player is null) return;
-        try { await _player.SeekAsync((long)PlaybackSeek.Value); }
+        try { await _player.SeekAsync((long)PlaybackSeek.Value); ShowDecodedVideo(); }
         catch (Exception ex) { Notice($"Could not seek: {ex.Message}"); }
     }
 }

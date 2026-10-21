@@ -38,6 +38,12 @@ public partial class App : Application
                 var backend = await WorkerArchiveClient.CreateAsync(root, CancellationToken.None);
                 await window.AttachBackendAsync(backend);
             }
+            if (Argument("--evidence-smoke") is { } evidenceReport)
+            {
+                await window.RunEvidenceSmokeAsync(evidenceReport, Argument("--render-query") ?? "Test Person driving");
+                Shutdown();
+                return;
+            }
             if (renderPath is not null)
             {
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
@@ -67,6 +73,13 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            if (Argument("--evidence-smoke") is { } evidenceReport)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(evidenceReport))!);
+                await File.WriteAllTextAsync(evidenceReport, JsonSerializer.Serialize(new { passed = false, error = ex.ToString() }));
+                Shutdown(1);
+                return;
+            }
             if (Argument("--interaction-smoke") is not null) { Shutdown(1); return; }
             if (Argument("--playback-smoke") is not null || Argument("--paused-playback-smoke") is not null)
             {

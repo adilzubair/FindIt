@@ -40,12 +40,24 @@ Read-only file attributes are not a whole-volume write-protection test.
 The final `--reader-only` pass checks the existing prepared library using the
 exact packaged worker after updates. It verifies search, previews, named-person
 evidence, runtime locations, and unchanged originals without preparing or
-changing people. Temporal checks use the recorded segment intervals; intervals
-can span a scene cut. They do not establish a person's action or speaking role.
+changing people. Person evidence is checked at its sampled timestamp, including
+when the catalog was made by an older extractor with broad intervals. Older
+temporal clips may span a scene cut. These checks do not establish a person's
+action or speaking role.
 
 Reports retain errors and cleanup failures. A failed run must be investigated
 before handoff; a pass does not replace the clean offline second-PC test.
 Keep the first failing report when retesting a fix.
+
+## Native scene and person regression
+
+`--people-media` is a separate workspace-only mode. It accepts the generated
+media fixture and creates its own marked archive under `artifacts`; it refuses
+removable-drive roots and unowned existing files. It prepares real media through
+the selected native worker, checks scene-bounded clips and their overlapping
+windows, enrolls a reference identity, and verifies sampled context thumbnails
+and preview timestamps. It preserves the prepared gallery for UI inspection.
+It does not modify the tested USB baseline.
 
 The app's `--render-ui` and `--playback-smoke` modes can additionally exercise
 the actual portable launcher, prepared interface, and isolated LibVLC player.

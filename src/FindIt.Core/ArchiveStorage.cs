@@ -75,6 +75,7 @@ internal sealed class ArchiveStorage
     private async Task<GenerationManifest?> RecoverCoreAsync(CancellationToken cancellationToken)
     {
         RecoveryNotice = null;
+        if (!Directory.Exists(Root)) throw new DirectoryNotFoundException("The archive drive is not connected. Reconnect it to continue searching.");
         if (!Directory.Exists(Home)) return null;
         PortablePaths.RejectLinks(Root, Home);
         CurrentGeneration? pointer = null;
@@ -135,10 +136,13 @@ internal sealed class ArchiveStorage
         var target = GenerationDirectory(manifest.GenerationId);
         if (Directory.Exists(target)) throw new IOException("This generation already exists.");
         await WriteAtomicAsync(Path.Combine(sourceFolder, "manifest.json"), JsonSerializer.Serialize(manifest, WireJson.Options), cancellationToken);
-        Directory.Move(sourceFolder, target);
+        PreparationFaults.Hit(Root, "publication.manifest-ready");
+        await MoveWithRetryAsync(() => Directory.Move(sourceFolder, target), cancellationToken);
+        PreparationFaults.Hit(Root, "publication.generation-moved");
         // Publication is a pointer to a complete generation. Recovery scans and validates generations if the pointer tears.
         var pointer = new CurrentGeneration(manifest.GenerationId, await HashFileAsync(Path.Combine(target, "manifest.json"), cancellationToken));
         await WriteAtomicAsync(Path.Combine(Home, "current.json"), JsonSerializer.Serialize(pointer, WireJson.Options), cancellationToken);
+        PreparationFaults.Hit(Root, "publication.pointer-switched");
         await recoveryGate.WaitAsync(cancellationToken);
         try { cached = null; verifiedFiles = []; }
         finally { recoveryGate.Release(); }
@@ -161,11 +165,43 @@ internal sealed class ArchiveStorage
     public static async Task WriteAtomicAsync(string path, string text, CancellationToken cancellationToken)
     {
         var temporary = path + ".new-" + Guid.NewGuid().ToString("N");
-        await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous))
+        bool temporaryCreated = false;
+        try
         {
-            await stream.WriteAsync(Encoding.UTF8.GetBytes(text), cancellationToken);
-            stream.Flush(true);
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous))
+            {
+                temporaryCreated = true;
+                await stream.WriteAsync(Encoding.UTF8.GetBytes(text), cancellationToken);
+                stream.Flush(true);
+            }
+            if (Path.GetFileName(path) == "current.json")
+                PreparationFaults.Hit(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(path)))!, "publication.pointer-ready");
+            await MoveWithRetryAsync(() => File.Move(temporary, path, true), cancellationToken);
         }
-        File.Move(temporary, path, true);
+        finally
+        {
+            // A failed replace must not accumulate one orphan per retry. This file
+            // was created by this invocation; never remove another job's temporary.
+            try { if (temporaryCreated) File.Delete(temporary); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static async Task MoveWithRetryAsync(Action move, CancellationToken cancellationToken)
+    {
+        // Antivirus/indexing briefly opens newly flushed SQLite files on Windows.
+        // Retry only sharing/access races; permanent denial still fails with the
+        // previous pointer intact, and cancellation remains responsive.
+        for (int attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try { move(); return; }
+            catch (Exception error) when (OperatingSystem.IsWindows() && attempt < 5 &&
+                error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) is 5 or 32 or 33)
+            {
+                await Task.Delay(50 << attempt, cancellationToken);
+            }
+        }
     }
 }

@@ -142,12 +142,13 @@ internal sealed class ReaderValidation
         var visuals=preview.Moments.Where(m=>m.Kind is SegmentKind.VideoFrame or SegmentKind.VideoClip).ToArray();
         var clips=visuals.Where(m=>m.Kind==SegmentKind.VideoClip).ToArray();
         Check(visuals.Count(m=>m.Kind==SegmentKind.VideoFrame&&m.Thumbnail is not null)>=14,"Video lacks its one-Hz visual coverage.");
-        Check(clips.Length>=2&&clips.All(m=>m.EndMs-m.StartMs==8000),"Video lacks its expected eight-second clip windows.");
+        bool sampledInstants=visuals.Where(m=>m.Kind==SegmentKind.VideoFrame).All(m=>m.EndMs-m.StartMs==1);
+        Check(sampledInstants?clips.Length==4&&clips.All(m=>DriveValidation.WithinFixtureShot(m.StartMs!.Value,m.EndMs!.Value)):clips.Length>=2&&clips.All(m=>m.EndMs-m.StartMs==8000),"Video lacks its expected temporal windows for this preparation profile.");
         Check(visuals.All(m=>m.StartMs>=0&&m.EndMs>=m.StartMs&&m.EndMs<=14000),"Visual moments exceed the actual 14-second source.");
         Check(PathEquals(preview.OriginalPath,Resolve(Video))&&File.Exists(preview.OriginalPath),"Video preview points outside the selected original.");
         var selected=visuals.First(m=>m.Kind==SegmentKind.VideoFrame&&m.StartMs>=6500&&m.StartMs<10500);
         var atMoment=await Client.GetPreviewAsync(new(preview.FileId,selected.SegmentId),Token);Check(atMoment.StartMs==selected.StartMs,"Selected moment did not preserve its source position.");
-        return new{preview.OriginalPath,selectedStartMs=atMoment.StartMs,visuals,allMoments=preview.Moments};
+        return new{preview.OriginalPath,selectedStartMs=atMoment.StartMs,sampledInstants,visuals,allMoments=preview.Moments};
     }
 
     private async Task<object?> CheckPeople()
@@ -170,7 +171,7 @@ internal sealed class ReaderValidation
         foreach(var observation in accepted)
         {
             var frames=source.Moments.Where(m=>m.Kind==SegmentKind.VideoFrame&&m.StartMs==observation.StartMs).ToArray();
-            var intervals=frames.Where(m=>m.StartMs.HasValue).Select(m=>new FaceInterval(observation.Id,m.StartMs!.Value,EffectiveEnd(m.StartMs.Value,m.EndMs))).Distinct().ToArray();
+            var intervals=frames.Where(m=>m.StartMs.HasValue).Select(m=>new FaceInterval(observation.Id,m.StartMs!.Value,m.StartMs.Value+1)).Distinct().ToArray();
             if(intervals.Length==1)precise.Add(intervals[0]);else missing.Add(observation.Id);
         }
         bool preciseComplete=missing.Count==0;
@@ -186,7 +187,7 @@ internal sealed class ReaderValidation
             searches.Add(new{query,response=Summary(response),everyMomentOverlapsStoredFaceIntervals=preciseComplete,intervalProof=preciseComplete?"exact source VideoFrame intervals, including face-only half-second segments":"external aggregate portrait-shot range only; some exact observation segment intervals were unavailable",everyMomentOverlapsExternalPortraitShot=moments.All(m=>m.StartMs is long start&&Overlaps(start,EffectiveEnd(start,m.EndMs),6500,10500)),momentsOutsideExternalShot=moments.Where(m=>m.StartMs is long start&&!Overlaps(start,EffectiveEnd(start,m.EndMs),6500,10500))});
         }
         var negative=await Search("Test Person AB-0091",new(){ExactOnly=true});Check(negative.Results.Count==0,"Unrelated invoice content was attached to the named face.");
-        return new{personId=person.Id,person.Name,alias,observations,preciseEvidenceComplete=preciseComplete,missingSourceIntervalObservationIds=missing,storedFaceIntervals=precise,externalPortraitShot=new{startMs=6500,endMs=10500},samplingLimitation="Stored one-second frame intervals can span a shot cut; strict stored overlap does not verify a person's action or role.",searches,negativeCount=negative.Results.Count};
+        return new{personId=person.Id,person.Name,alias,observations,preciseEvidenceComplete=preciseComplete,missingSourceIntervalObservationIds=missing,sampledFaceInstants=precise,externalPortraitShot=new{startMs=6500,endMs=10500},samplingLimitation="Face evidence establishes only the sampled instant; actions, roles, speaker and presence between samples remain unverified.",searches,negativeCount=negative.Results.Count};
     }
 
     private async Task<object?> CheckModules()

@@ -13,5 +13,6 @@
   <Folder Name="/tools/">
     <Project Path="tools/FindIt.Bench/FindIt.Bench.csproj" />
     <Project Path="tools/FindIt.DriveCheck/FindIt.DriveCheck.csproj" />
+    <Project Path="tools/FindIt.RecoveryCheck/FindIt.RecoveryCheck.csproj" />
   </Folder>
 </Solution>

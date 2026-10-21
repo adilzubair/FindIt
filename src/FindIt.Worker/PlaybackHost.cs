@@ -36,6 +36,10 @@ internal sealed class PlaybackHost : IDisposable
             if (media == 0) throw new IOException("The media could not be opened.");
             try
             {
+                // Use the bundled FFmpeg demuxer consistently with extraction's
+                // common container origin. Native MP4/Matroska demuxers can expose
+                // offset presentation clocks, showing a different frame at a seek.
+                Native.libvlc_media_add_option(media, ":demux=avformat");
                 if (request.StartMs > 0)
                     Native.libvlc_media_add_option(media, ":start-time=" + (request.StartMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture));
                 // LibVLC applies this in input initialization, before normal playback/demux.

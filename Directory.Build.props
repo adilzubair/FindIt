@@ -9,4 +9,8 @@
     <RestorePackagesPath>$(MSBuildThisFileDirectory).packages</RestorePackagesPath>
     <RestoreFallbackFolders Condition="Exists('$(USERPROFILE)/.nuget/packages')">$(USERPROFILE)/.nuget/packages</RestoreFallbackFolders>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(FindItEnableFaultInjection)' == 'true'">
+    <!-- Validation-only worker builds. The normal portable package has no fault activation code. -->
+    <DefineConstants>$(DefineConstants);FINDIT_FAULT_INJECTION</DefineConstants>
+  </PropertyGroup>
 </Project>
