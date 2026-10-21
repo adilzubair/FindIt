@@ -8,6 +8,8 @@ Search moments optionally carry `PersonEvidence`: the person and observation IDs
 
 Published catalogs and manifests do not change during search or preview. These wire fields are additive. Preparation includes the processor extraction fingerprint; installing the new reader opens an existing archive immediately, while **explicitly preparing again** applies the new extraction policy to unchanged files.
 
+Before opening an original, preview compares its current byte length and UTC modification time with the prepared record. A mismatch blocks preview and asks for explicit preparation, so old face evidence cannot automatically open visibly changed media. This is a metadata check, not a content hash. Equal-size, equal-timestamp replacements require preparation with **Verify contents**.
+
 ## Preparation timeline
 
 FFmpeg retains selected source presentation timestamps rather than retiming images with its `fps` filter. Half-second target slots limit face processing without bursts after sparse VFR gaps; regular visual samples target one-second slots. A bounded four-entry channel pairs timestamps and raw images, rawvideo output uses one encoder thread, diagnostic text is bounded, and cancellation kills and drains the decoder. Missing or invalid frame timestamps fail that file rather than pairing a later timestamp with the wrong image.

@@ -52,6 +52,8 @@ Read [architecture](docs/ARCHITECTURE.md), [release validation](docs/RELEASE-VAL
 
 Existing prepared libraries remain readable. Explicitly preparing with this version refreshes extraction when its policy changes, including the new video scene boundaries. Sampling and cut detection can miss brief appearances or edits; person/action results remain possible matches for inspection.
 
+If an original's size or modification time changed after preparation, FindIt blocks its stale preview and asks you to prepare again. Use **Verify contents** to detect replacements whose size and timestamp were deliberately preserved.
+
 For an existing portable drive, close FindIt and merge the new `FindIt.exe` and `FindIt` application folder into the drive root. Preserve `FindIt/archive` and all original folders. The new package contains no prepared archive. Open and search first; start preparation explicitly when ready to refresh the media extraction policy.
 
 ## Measurements and updates

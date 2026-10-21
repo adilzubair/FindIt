@@ -264,10 +264,13 @@ public sealed partial class ArchiveService
     {
         var generation = await storage.RecoverAsync(cancellationToken) ?? throw new InvalidOperationException("Prepare an archive first.");
         using var db = ArchiveDatabase.Open(storage.CatalogPath(generation), true);
-        using var command = db.CreateCommand(); command.CommandText = "SELECT path,kind FROM files WHERE id=$id;"; command.Parameters.AddWithValue("$id", request.FileId.ToString("D"));
-        string path; FileKind kind;
-        using (var reader = command.ExecuteReader()) { if (!reader.Read()) throw new FileNotFoundException("This item is not in the current archive generation."); path = reader.GetString(0); kind = (FileKind)reader.GetInt32(1); }
+        using var command = db.CreateCommand(); command.CommandText = "SELECT path,kind,bytes,modified FROM files WHERE id=$id;"; command.Parameters.AddWithValue("$id", request.FileId.ToString("D"));
+        string path, modified; FileKind kind; long bytes;
+        using (var reader = command.ExecuteReader()) { if (!reader.Read()) throw new FileNotFoundException("This item is not in the current archive generation."); path = reader.GetString(0); kind = (FileKind)reader.GetInt32(1); bytes = reader.GetInt64(2); modified = reader.GetString(3); }
         string original = PortablePaths.Resolve(RootPath, path);
+        var originalInfo = new FileInfo(original);
+        if (originalInfo.Length != bytes || originalInfo.LastWriteTimeUtc.ToString("O", CultureInfo.InvariantCulture) != modified)
+            throw new IOException("The original changed since preparation. Explicitly prepare this folder again to refresh its search results and preview.");
         var personIds = request.PersonIds?.Distinct().ToArray() ?? [];
         if (personIds.Length > 32) throw new ArgumentException("Choose at most 32 people in one preview.");
         var moments = new List<SearchMoment>();
