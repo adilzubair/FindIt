@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/FindIt.Client/FindIt.Client.csproj" />
+    <ProjectReference Include="../../src/FindIt.Runtime/FindIt.Runtime.csproj" />
+  </ItemGroup>
+</Project>
