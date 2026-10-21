@@ -13,7 +13,6 @@ public partial class MainWindow
     // Explicit workspace validation: real reader, prepared evidence and native player.
     public async Task RunEvidenceSmokeAsync(string reportPath, string query)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var checks = new List<string>();
         void Require(bool condition, string name)
         {
@@ -21,6 +20,9 @@ public partial class MainWindow
             checks.Add(name);
         }
         await RenderArchiveAsync(query, true, "video");
+        // Slow removable media can spend longer initializing the model. Time the
+        // playback checks separately; initialization is measured by the caller.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         Require(_preview?.PersonEvidence.Count > 0 && _player is not null, "real-person-evidence-and-player-open");
         Require(_showingPreparedFrame && PreviewImage.Source is BitmapSource { PixelWidth: > 0 } && VideoPlayer.Visibility == Visibility.Hidden && VideoPlayer.WindowHandle != 0,
             "sampled-evidence-poster-visible-before-play");

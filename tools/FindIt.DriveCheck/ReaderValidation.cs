@@ -69,9 +69,11 @@ internal sealed class ReaderValidation
             }))return 1;
             await Step("reader-exact-seven-documents-and-unicode",CheckDocuments);
             await Step("reader-semantic-canine-photo-rank-one",CheckSemantic);
+            await Step("reader-small-filter-keeps-ann-unloaded",CheckAnnDeferred);
             await Step("reader-spoken-country-in-audio-and-video",CheckSpeech);
             await Step("reader-video-original-and-timed-moments",CheckVideo);
             await Step("reader-existing-person-alias-and-strict-temporal-overlap",CheckPeople);
+            await Step("reader-broad-semantic-initializes-ann",CheckBroadSemantic);
             await Step("reader-final-package-module-paths",CheckModules);
             await Step("reader-generation-preserved",async()=>
             {
@@ -134,6 +136,23 @@ internal sealed class ReaderValidation
             Check(result!.Moments.Any(m=>m.Kind==SegmentKind.Transcript&&m.StartMs>=0&&m.EndMs>m.StartMs&&m.EndMs<=14100),"Speech query lacks a source-timed transcript in "+path);
         }
         return Summary(response);
+    }
+
+    private async Task<object?> CheckAnnDeferred()
+    {
+        var diagnostics=await Client.GetDiagnosticsAsync(Token);
+        using var process=Process.GetProcessById(diagnostics.ProcessId);process.Refresh();
+        var modules=process.Modules.Cast<ProcessModule>().Select(m=>m.ModuleName).ToArray();
+        Check(!modules.Any(name=>name.Equals("libusearch_c.dll",StringComparison.OrdinalIgnoreCase)),"The four-photo exact filter unnecessarily loaded native ANN.");
+        return new{diagnostics.ProcessId,annLoaded=false,scope="Fresh reader after the small photo filter, before a broad semantic query."};
+    }
+
+    private async Task<object?> CheckBroadSemantic()
+    {
+        var response=await Search("pale canine outdoors");
+        Check(response.SemanticUsed&&string.IsNullOrWhiteSpace(response.Notice),"The unfiltered query did not use the prepared ANN path: "+response.Notice);
+        Check(response.Results.Any(result=>PathEquals(result.RelativePath,"Library/Photos/white-dog-on-grass.jpg")),"The broad semantic query omitted the fixture dog photograph.");
+        return new{scope="Exercises broad ANN loading after exact-only filtered retrieval; module paths are checked next.",response=Summary(response)};
     }
 
     private async Task<object?> CheckVideo()
