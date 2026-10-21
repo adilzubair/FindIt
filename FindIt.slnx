@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FindIt.Shared/FindIt.Shared.csproj" />
+    <Project Path="src/FindIt.Client/FindIt.Client.csproj" />
+    <Project Path="src/FindIt.Runtime/FindIt.Runtime.csproj" />
+    <Project Path="src/FindIt.Core/FindIt.Core.csproj" />
+    <Project Path="src/FindIt.Worker/FindIt.Worker.csproj" />
+    <Project Path="src/FindIt.App/FindIt.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FindIt.Tests/FindIt.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/FindIt.Bench/FindIt.Bench.csproj" />
+  </Folder>
+</Solution>

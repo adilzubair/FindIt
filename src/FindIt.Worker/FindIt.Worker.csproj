@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <VlcWindowsX64Enabled>true</VlcWindowsX64Enabled>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+    <ProjectReference Include="../FindIt.Shared/FindIt.Shared.csproj" />
+    <ProjectReference Include="../FindIt.Core/FindIt.Core.csproj" />
+    <ProjectReference Include="../FindIt.Runtime/FindIt.Runtime.csproj" />
+  </ItemGroup>
+</Project>

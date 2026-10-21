@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.24)
+project(FindItLauncher C)
+add_executable(FindIt WIN32 launcher.c)
+target_link_libraries(FindIt PRIVATE advapi32 shell32 user32)
+if(MINGW)
+  target_link_options(FindIt PRIVATE -municode -static -Wl,--stack,16777216)
+endif()

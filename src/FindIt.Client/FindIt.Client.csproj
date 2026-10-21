@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup><ProjectReference Include="../FindIt.Shared/FindIt.Shared.csproj" /></ItemGroup>
+</Project>
