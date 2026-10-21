@@ -41,7 +41,7 @@ public partial class MainWindow
             var state = await _player.GetStateAsync(timeout.Token);
             Require(!state.Playing && Math.Abs(state.PositionMs - expected) <= 100, "paused-clock-remains-at-evidence-time");
         }
-        var button = VisualChildren<Button>(VideoControls).Single(b => Equals(b.Content, "Play / pause"));
+        var button = PlayPauseButton;
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         while (!(await _player.GetStateAsync(timeout.Token)).Playing || _showingPreparedFrame)
             await Task.Delay(50, timeout.Token);

@@ -9,7 +9,7 @@ public sealed class VideoSurface : HwndHost
     public nint WindowHandle => Handle;
     protected override HandleRef BuildWindowCore(HandleRef hwndParent)
     {
-        var handle = CreateWindowEx(0, "STATIC", "FindIt video", 0x40000000 | 0x10000000 | 0x02000000, 0, 0, Math.Max(1, (int)ActualWidth), Math.Max(1, (int)ActualHeight), hwndParent.Handle, 0, 0, 0);
+        var handle = CreateWindowEx(0, "STATIC", "", 0x40000000 | 0x10000000 | 0x02000000, 0, 0, Math.Max(1, (int)ActualWidth), Math.Max(1, (int)ActualHeight), hwndParent.Handle, 0, 0, 0);
         if (handle == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         return new(this, handle);
     }

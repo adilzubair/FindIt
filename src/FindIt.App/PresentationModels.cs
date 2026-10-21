@@ -16,25 +16,34 @@ public sealed class ResultTile : INotifyPropertyChanged
 {
     public required SearchResult Result { get; init; }
     private bool _isSelected;
-    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; Changed(); } }
+    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; Changed(); Changed(nameof(AccessibleName)); } }
     private double _tileWidth = 210;
-    public double TileWidth { get => _tileWidth; set { if (Math.Abs(value - _tileWidth) < .5) return; _tileWidth = value; Changed(); } }
+    public double TileWidth { get => _tileWidth; set { if (Math.Abs(value - _tileWidth) < .001) return; _tileWidth = value; Changed(); } }
     private double _thumbnailHeight = 148;
-    public double ThumbnailHeight { get => _thumbnailHeight; set { if (Math.Abs(value - _thumbnailHeight) < .5) return; _thumbnailHeight = value; Changed(); } }
+    public double ThumbnailHeight { get => _thumbnailHeight; set { if (Math.Abs(value - _thumbnailHeight) < .001) return; _thumbnailHeight = value; Changed(); } }
     private BitmapSource? _thumbnail;
-    public BitmapSource? Thumbnail { get => _thumbnail; set { _thumbnail = value; Changed(); Changed(nameof(HasTextPreview)); Changed(nameof(GlyphVisibility)); } }
+    private double? _decodedAspectRatio;
+    public BitmapSource? Thumbnail { get => _thumbnail; set { _thumbnail = value; if (value is { PixelWidth: > 0, PixelHeight: > 0 }) _decodedAspectRatio = value.PixelWidth / (double)value.PixelHeight; Changed(); Changed(nameof(HasTextPreview)); Changed(nameof(GlyphVisibility)); } }
+    public double AspectRatio => _decodedAspectRatio ?? (Result.Thumbnail is { Width: > 0, Height: > 0 } image ? image.Width / (double)image.Height : Result.Kind switch { FileKind.Video => 16d / 9, FileKind.Document => .78, FileKind.Audio => 1, _ => 4d / 3 });
+    public string ExtensionLabel => Path.GetExtension(Result.Name).TrimStart('.').ToUpperInvariant();
+    public bool IsDocument => Result.Kind == FileKind.Document;
+    public bool IsTimedMedia => Result.Kind is FileKind.Video or FileKind.Audio;
+    public bool IsPossibleMatch => Result.MatchCategory == MatchCategory.PossiblePersonAction;
+    public string MediaBadge => (Result.Moments.FirstOrDefault()?.PersonEvidence.FirstOrDefault()?.StartMs ?? Result.Moments.FirstOrDefault()?.StartMs) is long time ? $"▶ {TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss}" : Result.Kind == FileKind.Audio ? "♪ Audio" : "▶ Video";
     public string KindLabel => Result.Kind switch { FileKind.Image => "Photo", FileKind.Video => "Video", FileKind.Document => "Document", FileKind.Audio => "Audio", _ => "File" };
+    public FindItIconKind IconKind => Result.Kind switch { FileKind.Image => FindItIconKind.Photo, FileKind.Video => FindItIconKind.Video, FileKind.Audio => FindItIconKind.Audio, _ => FindItIconKind.Document };
     public string KindGlyph => Result.Kind switch { FileKind.Image => "\uEB9F", FileKind.Video => "\uE714", FileKind.Audio => "\uE8D6", _ => "\uE8A5" };
     public bool HasTextPreview => Thumbnail is null && Result.Kind == FileKind.Document && !string.IsNullOrWhiteSpace(Result.Snippet);
     public Visibility GlyphVisibility => Thumbnail is not null || HasTextPreview ? Visibility.Collapsed : Visibility.Visible;
     public string DateLabel => Result.ModifiedUtc.ToLocalTime().ToString("dd MMM yyyy");
-    public string AccessibleName => $"{Result.Name}, {KindLabel}, {Result.RelativePath}. Open preview.";
+    public string AccessibleName => $"{(IsSelected ? "Selected, " : "")}{Result.Name}, {KindLabel}, {Result.RelativePath}. Open preview.";
     public string Subtitle => Result.MatchCategory == MatchCategory.PossiblePersonAction ? "Possible person/action match" : (Result.Moments.FirstOrDefault()?.PersonEvidence.FirstOrDefault()?.StartMs ?? Result.Moments.FirstOrDefault()?.StartMs) is long time ? $"{TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss} · {Result.Moments.Count} matching {(Result.Moments.Count == 1 ? "moment" : "moments")}" : $"{KindLabel} · {DateLabel}";
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }
 
-public sealed record ResultRow(IReadOnlyList<ResultTile> Tiles);
+public sealed record ResultRow(IReadOnlyList<ResultTile> Tiles, double Extent);
+
 public sealed record EvidenceFaceTile(string Name, string Detail, BitmapSource? Portrait)
 {
     public string AccessibleName => $"{Name}. {Detail}. Sampled face evidence.";
@@ -43,6 +52,22 @@ public sealed record FolderChoice(string Label, string? Path);
 public sealed class TextPresenceConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => string.IsNullOrWhiteSpace(value as string) ? Visibility.Collapsed : Visibility.Visible;
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
+}
+
+public sealed class FolderCaptionConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => value is string path ? path.TrimEnd('/', '\\').Split('/', '\\').LastOrDefault() ?? path : "Folder";
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
+}
+
+public sealed class CountLabelConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var count = System.Convert.ToInt64(value, culture);
+        return $"{count:N0} {parameter}{(count == 1 ? "" : "s")}";
+    }
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 }
 
@@ -119,15 +144,16 @@ internal sealed class ThumbnailCache
 
 public sealed class PersonTile : INotifyPropertyChanged
 {
+    public double ThumbnailHeight => 132;
     public required PersonRecord Person { get; init; }
     private double _tileWidth = 160;
-    public double TileWidth { get => _tileWidth; set { if (Math.Abs(value - _tileWidth) < .5) return; _tileWidth = value; Changed(); } }
+    public double TileWidth { get => _tileWidth; set { if (Math.Abs(value - _tileWidth) < .001) return; _tileWidth = value; Changed(); } }
     private BitmapSource? _portrait;
     public BitmapSource? Portrait { get => _portrait; set { _portrait = value; Changed(); } }
     private bool _isSelected;
-    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; Changed(); } }
+    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; Changed(); Changed(nameof(AccessibleName)); } }
     public string Initials => string.Concat(Person.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(name => StringInfo.GetNextTextElement(name))).ToUpperInvariant();
-    public string AccessibleName => $"{Person.Name}, {Person.ObservationCount:N0} observations. Open person details.";
+    public string AccessibleName => $"{(IsSelected ? "Selected, " : "")}{Person.Name}, {Person.ObservationCount:N0} observation{(Person.ObservationCount == 1 ? "" : "s")}. Open person details.";
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }

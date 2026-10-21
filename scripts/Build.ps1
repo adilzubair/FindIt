@@ -29,8 +29,12 @@ try {
     if ($LASTEXITCODE) { throw 'Managed build failed.' }
     $taskCompiler = Get-ChildItem '.tools/llvm-mingw-*/bin/x86_64-w64-mingw32-clang.exe' | Select-Object -First 1 -ExpandProperty FullName
     if (-not $taskCompiler) { throw 'Portable C compiler is missing. Run Fetch-Dependencies.ps1.' }
+    $taskResourceCompiler = Join-Path (Split-Path $taskCompiler -Parent) 'x86_64-w64-mingw32-windres.exe'
+    if (-not (Test-Path -LiteralPath $taskResourceCompiler)) { throw 'Portable resource compiler is missing. Run Fetch-Dependencies.ps1.' }
     New-Item -ItemType Directory -Force artifacts/launcher | Out-Null
-    & $taskCompiler src/FindIt.Launcher/launcher.c -o artifacts/launcher/FindIt.exe -O2 -municode -mwindows -static '-Wl,--stack,16777216' -ladvapi32 -lshell32 -luser32
+    & $taskResourceCompiler -I src/FindIt.App/Assets -i src/FindIt.Launcher/launcher.rc -o artifacts/launcher/FindIt-icon.o -O coff
+    if ($LASTEXITCODE) { throw 'Native launcher icon resource build failed.' }
+    & $taskCompiler src/FindIt.Launcher/launcher.c artifacts/launcher/FindIt-icon.o -o artifacts/launcher/FindIt.exe -O2 -municode -mwindows -static '-Wl,--stack,16777216' -ladvapi32 -lshell32 -luser32
     if ($LASTEXITCODE) { throw 'Native launcher build failed.' }
     if (-not $SkipTests) {
         if ($BuildArtifactsPath) {

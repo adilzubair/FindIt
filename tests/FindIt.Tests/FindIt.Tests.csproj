@@ -2,6 +2,7 @@
   <PropertyGroup><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/FindIt.App/LibraryPresentation.cs" Link="Presentation/LibraryPresentation.cs" />
+    <Compile Include="../../src/FindIt.App/ContactSheetLayout.cs" Link="Presentation/ContactSheetLayout.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageReference Include="MSTest.TestAdapter" Version="4.3.3" />
     <PackageReference Include="MSTest.TestFramework" Version="4.3.3" />

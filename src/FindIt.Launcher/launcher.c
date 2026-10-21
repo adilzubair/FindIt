@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <strsafe.h>
 #include <wchar.h>
 
@@ -113,6 +114,7 @@ static int quote(wchar_t *out, size_t *position, const wchar_t *argument) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int show) {
+    SetCurrentProcessExplicitAppUserModelID(L"FindIt.Desktop");
     (void)instance; (void)previous; (void)commandLine; (void)show;
     wchar_t root[CAP], versionPath[CAP], version[65], source[CAP], cache[CAP], manifest[CAP], hash[65], app[CAP], complete[CAP];
     DWORD moduleLength = GetModuleFileNameW(NULL, root, CAP);

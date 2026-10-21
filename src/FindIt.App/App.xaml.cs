@@ -12,6 +12,7 @@ public partial class App : Application
 {
     protected override async void OnStartup(StartupEventArgs e)
     {
+        AppIdentity.Initialize();
         base.OnStartup(e);
         string? Argument(string name) => Array.IndexOf(e.Args, name) is var index && index >= 0 && index + 1 < e.Args.Length ? e.Args[index + 1] : null;
         var root = Argument("--root") ?? Path.GetPathRoot(AppContext.BaseDirectory) ?? AppContext.BaseDirectory;

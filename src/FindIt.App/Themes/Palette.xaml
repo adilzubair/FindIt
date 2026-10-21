@@ -1,23 +1,49 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <FontFamily x:Key="AppFont">pack://application:,,,/Assets/Fonts/#IBM Plex Sans</FontFamily>
-  <SolidColorBrush x:Key="CanvasBrush" Color="#F6F7F9"/>
+  <SolidColorBrush x:Key="CanvasBrush" Color="#FFFFFF"/>
   <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF"/>
-  <SolidColorBrush x:Key="SidebarBrush" Color="#F0F2F5"/>
-  <SolidColorBrush x:Key="InkBrush" Color="#17212D"/>
-  <SolidColorBrush x:Key="MutedBrush" Color="#667180"/>
-  <SolidColorBrush x:Key="BorderBrush" Color="#E3E7ED"/>
-  <SolidColorBrush x:Key="AccentBrush" Color="#3D65D8"/>
-  <SolidColorBrush x:Key="AccentButtonBrush" Color="#3D65D8"/>
+  <SolidColorBrush x:Key="SidebarBrush" Color="#F9F9F9"/>
+  <SolidColorBrush x:Key="InkBrush" Color="#2C2F32"/>
+  <SolidColorBrush x:Key="MutedBrush" Color="#6B6D70"/>
+  <SolidColorBrush x:Key="BorderBrush" Color="#E6E6E6"/>
+  <SolidColorBrush x:Key="CheckBorderBrush" Color="#8C939D"/>
+  <SolidColorBrush x:Key="AccentBrush" Color="#0072EF"/>
+  <SolidColorBrush x:Key="AccentButtonBrush" Color="#0072EF"/>
   <SolidColorBrush x:Key="AccentButtonForegroundBrush" Color="#FFFFFF"/>
-  <SolidColorBrush x:Key="AccentTextBrush" Color="#3D65D8"/>
-  <SolidColorBrush x:Key="FocusBrush" Color="#3D65D8"/>
-  <SolidColorBrush x:Key="TintBrush" Color="#E9EEFC"/>
-  <SolidColorBrush x:Key="HoverBrush" Color="#EAEDF2"/>
-  <SolidColorBrush x:Key="PreviewBrush" Color="#ECEFF3"/>
+  <SolidColorBrush x:Key="AccentTextBrush" Color="#0067DB"/>
+  <SolidColorBrush x:Key="FocusBrush" Color="#0072EF"/>
+  <SolidColorBrush x:Key="TintBrush" Color="#E5F1FD"/>
+  <SolidColorBrush x:Key="HoverBrush" Color="#F4F5F5"/>
+  <SolidColorBrush x:Key="PreviewBrush" Color="#F6F7F8"/>
   <SolidColorBrush x:Key="ReadyBrush" Color="#177565"/>
   <SolidColorBrush x:Key="WarningBrush" Color="#945A0D"/>
   <SolidColorBrush x:Key="WarningTintBrush" Color="#FFF3DB"/>
   <SolidColorBrush x:Key="ErrorBrush" Color="#B53838"/>
   <SolidColorBrush x:Key="ErrorTintBrush" Color="#FCECEC"/>
-  <SolidColorBrush x:Key="ShadowBrush" Color="#1F17212D"/>
+  <SolidColorBrush x:Key="ShadowBrush" Color="#24000000"/>
+  <!-- Layered icon tones: a readable silhouette, colored face, and detail. -->
+  <SolidColorBrush x:Key="IconFolderBackBrush" Color="#BA801F"/>
+  <SolidColorBrush x:Key="IconFolderFrontBrush" Color="#F0BE55"/>
+  <SolidColorBrush x:Key="IconFolderDetailBrush" Color="#FFF0C7"/>
+  <SolidColorBrush x:Key="IconLibraryBackBrush" Color="#2868BA"/>
+  <SolidColorBrush x:Key="IconLibraryFrontBrush" Color="#69A4ED"/>
+  <SolidColorBrush x:Key="IconLibraryDetailBrush" Color="#EAF4FF"/>
+  <SolidColorBrush x:Key="IconPeopleBackBrush" Color="#7358AF"/>
+  <SolidColorBrush x:Key="IconPeopleFrontBrush" Color="#AB8DDD"/>
+  <SolidColorBrush x:Key="IconPeopleDetailBrush" Color="#F4EDFF"/>
+  <SolidColorBrush x:Key="IconPhotoBackBrush" Color="#207B80"/>
+  <SolidColorBrush x:Key="IconPhotoFrontBrush" Color="#5AB4AB"/>
+  <SolidColorBrush x:Key="IconPhotoDetailBrush" Color="#E4FAF2"/>
+  <SolidColorBrush x:Key="IconVideoBackBrush" Color="#7756AC"/>
+  <SolidColorBrush x:Key="IconVideoFrontBrush" Color="#AA83D8"/>
+  <SolidColorBrush x:Key="IconVideoDetailBrush" Color="#F6EDFF"/>
+  <SolidColorBrush x:Key="IconDocumentBackBrush" Color="#2868BA"/>
+  <SolidColorBrush x:Key="IconDocumentFrontBrush" Color="#69A4ED"/>
+  <SolidColorBrush x:Key="IconDocumentDetailBrush" Color="#EAF4FF"/>
+  <SolidColorBrush x:Key="IconAudioBackBrush" Color="#A74F75"/>
+  <SolidColorBrush x:Key="IconAudioFrontBrush" Color="#D988AA"/>
+  <SolidColorBrush x:Key="IconAudioDetailBrush" Color="#FFF0F6"/>
+  <SolidColorBrush x:Key="IconUtilityBackBrush" Color="#AFBFCE"/>
+  <SolidColorBrush x:Key="IconUtilityFrontBrush" Color="#52677D"/>
+  <SolidColorBrush x:Key="IconUtilityDetailBrush" Color="#F8FAFC"/>
 </ResourceDictionary>

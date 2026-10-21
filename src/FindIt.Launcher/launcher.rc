@@ -1,0 +1,4 @@
+#include "resource.h"
+
+// Resolved through the app Assets include directory in both native build paths.
+IDI_FINDIT ICON "FindIt.ico"

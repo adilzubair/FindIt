@@ -14,10 +14,14 @@ public partial class MainWindow
 {
     private LibraryFilterState _filters = new();
     private string _submittedQuery = "";
-    private GalleryMetrics _galleryMetrics = GalleryLayout.Calculate(220);
+    private IReadOnlyList<ContactSheetRow> _sheetRows = [];
+    private double _sheetWidth;
+    private int _sheetVersion;
+    private bool _aspectReflowQueued;
     private double _targetTileWidth = 220, _inspectorWidth = 340;
     private bool _uiReady, _arranging, _listMode, _compactPreview, _personInspectorOpen, _playbackSmoke;
     private int _returnAnchor, _peopleColumns;
+    private bool _peopleRowsDirty;
     private Guid? _lastResultId;
     private readonly List<PersonTile> _personTiles = [];
     private readonly Dictionary<PersonTile, CancellationTokenSource> _portraitRequests = [];
@@ -62,7 +66,19 @@ public partial class MainWindow
         FiltersButton.SetResourceReference(BackgroundProperty, ActiveFilterPanel.Children.Count > 0 ? "TintBrush" : "SurfaceBrush");
     }
 
-    private void FiltersClick(object sender, RoutedEventArgs e) => FiltersPopup.IsOpen = !FiltersPopup.IsOpen;
+    private void FiltersClick(object sender, RoutedEventArgs e)
+    {
+        if (!FiltersPopup.IsOpen)
+        {
+            var surface = (FrameworkElement)Content;
+            var bottom = FiltersButton.TranslatePoint(new Point(0, FiltersButton.ActualHeight), surface).Y;
+            FilterScroll.MaxHeight = Math.Clamp(surface.ActualHeight - bottom - 64, 120, 380);
+        }
+        FiltersPopup.IsOpen = !FiltersPopup.IsOpen;
+        if (FiltersPopup.IsOpen)
+            Dispatcher.BeginInvoke(() => { if (FiltersPopup.IsOpen) DateFilter.Focus(); }, DispatcherPriority.Input);
+        else FiltersButton.Focus();
+    }
     private void TypeTabClick(object sender, RoutedEventArgs e)
     {
         if (sender is ToggleButton { Tag: string tag } && int.TryParse(tag, out var index))
@@ -96,7 +112,7 @@ public partial class MainWindow
             case "person": PersonFilter.SelectedIndex = 0; break;
             case "exact": ExactFilter.IsChecked = false; break;
         }
-        _initialized = initialized; CaptureFilterState(); UpdateFilterUi(); await SearchAsync(true);
+        _initialized = initialized; CaptureFilterState(); UpdateFilterUi(); FiltersButton.Focus(); await SearchAsync(true);
     }
     private void ResetFilterControls()
     {
@@ -105,9 +121,15 @@ public partial class MainWindow
         AfterDate.SelectedDate = BeforeDate.SelectedDate = null; ExactFilter.IsChecked = false;
         _initialized = initialized; CaptureFilterState(); UpdateFilterUi();
     }
-    private async void ClearFiltersClick(object sender, RoutedEventArgs e) { ResetFilterControls(); await SearchAsync(true); }
-    private async void SearchClick(object sender, RoutedEventArgs e) { Navigate("search"); await SearchAsync(true); }
-    private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; Navigate("search"); await SearchAsync(true); } }
+    private async void ClearFiltersClick(object sender, RoutedEventArgs e)
+    {
+        var removedControl = sender is DependencyObject control && ActiveFilterPanel.IsAncestorOf(control);
+        ResetFilterControls();
+        if (removedControl) FiltersButton.Focus();
+        await SearchAsync(true);
+    }
+    private async void SearchClick(object sender, RoutedEventArgs e) { Navigate("search"); await SearchAsync(true, submitQuery: true); }
+    private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; Navigate("search"); await SearchAsync(true, submitQuery: true); } }
     private async void PreviousClick(object sender, RoutedEventArgs e) { if (_page > 0) await SearchAsync(false, _page - 1); }
     private async void NextClick(object sender, RoutedEventArgs e) { if (_pageCursors.Count > _page + 1) await SearchAsync(false, _page + 1); }
 
@@ -124,21 +146,80 @@ public partial class MainWindow
         try
         {
             var scroll = VisualChildren<ScrollViewer>(Gallery).FirstOrDefault();
-            var available = Math.Max(120, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - 12);
-            var metrics = GalleryLayout.Calculate(available, _targetTileWidth);
-            var anchor = GalleryLayout.GetAnchorIndex(scroll?.VerticalOffset ?? 0, _columns, _galleryMetrics.RowExtent);
-            var regroup = force || metrics.Columns != _columns;
-            _columns = metrics.Columns; _galleryMetrics = metrics;
-            foreach (var tile in CurrentTiles) { tile.TileWidth = metrics.TileWidth; tile.ThumbnailHeight = metrics.ThumbnailHeight; }
-            if (regroup)
+            var available = Math.Max(120, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - 8);
+            if (!force && Math.Abs(available - _sheetWidth) < .5 && _sheetRows.Sum(row => row.Count) == CurrentTiles.Count && Rows.SelectMany(row => row.Tiles).SequenceEqual(CurrentTiles)) return;
+            var anchor = GetGalleryAnchor();
+            var focusedButton = Keyboard.FocusedElement as Button;
+            var focusedTile = focusedButton?.DataContext as ResultTile;
+            if (focusedTile is not null && !CurrentTiles.Contains(focusedTile)) focusedTile = null;
+            _sheetWidth = available;
+            _sheetRows = ContactSheetLayout.Arrange(CurrentTiles.Select(tile => tile.AspectRatio).ToArray(), available, _targetTileWidth * .75);
+            _columns = _sheetRows.FirstOrDefault()?.Count ?? 1;
+            _sheetVersion++;
+            Rows.Clear();
+            foreach (var row in _sheetRows)
             {
-                Rows.Clear();
-                for (var i = 0; i < CurrentTiles.Count; i += _columns) Rows.Add(new(CurrentTiles.Skip(i).Take(_columns).ToArray()));
+                var tiles = CurrentTiles.Skip(row.Start).Take(row.Count).ToArray();
+                for (var i = 0; i < tiles.Length; i++) { tiles[i].TileWidth = row.Widths[i]; tiles[i].ThumbnailHeight = row.ThumbnailHeight; }
+                Rows.Add(new(tiles, row.Extent));
             }
             if (scroll is not null && anchor > 0)
-                Dispatcher.BeginInvoke(() => scroll.ScrollToVerticalOffset(GalleryLayout.GetAnchorOffset(anchor, _columns, _galleryMetrics.RowExtent)), DispatcherPriority.Loaded);
+                ScrollGalleryToAnchor(anchor);
+            if (focusedTile is not null) RestoreGalleryReflowFocus(focusedTile, focusedButton!, _sheetVersion);
         }
         finally { _arranging = false; }
+    }
+    // WPF rounds and estimates virtualized row extents. Use a realized row for the
+    // visible anchor, then correct against its measured position after a reflow.
+    private int GetGalleryAnchor()
+    {
+        var viewport = VisualChildren<ScrollContentPresenter>(Gallery).FirstOrDefault();
+        if (viewport is not null)
+            for (var index = 0; index < Rows.Count; index++)
+                if (Gallery.ItemContainerGenerator.ContainerFromIndex(index) is ListBoxItem container)
+                {
+                    var top = container.TranslatePoint(new Point(), viewport).Y;
+                    if (top + container.ActualHeight > 1 && top < viewport.ActualHeight && index < _sheetRows.Count) return _sheetRows[index].Start;
+                }
+        return ContactSheetLayout.FindAnchorIndex(_sheetRows, VisualChildren<ScrollViewer>(Gallery).FirstOrDefault()?.VerticalOffset ?? 0);
+    }
+    private void ScrollGalleryToAnchor(int anchor)
+    {
+        if (_sheetRows.Count == 0) return;
+        var version = _sheetVersion;
+        var rowIndex = ContactSheetLayout.GetRowIndex(_sheetRows, anchor);
+        var row = Rows.ElementAtOrDefault(rowIndex);
+        var scroll = VisualChildren<ScrollViewer>(Gallery).FirstOrDefault();
+        if (row is null || scroll is null) return;
+        scroll.ScrollToVerticalOffset(ContactSheetLayout.GetOffsetForIndex(_sheetRows, anchor));
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (version != _sheetVersion || !Gallery.IsVisible) return;
+            Gallery.ScrollIntoView(row);
+            Gallery.UpdateLayout();
+            if (version != _sheetVersion) return;
+            if (Gallery.ItemContainerGenerator.ContainerFromIndex(rowIndex) is not ListBoxItem container || VisualChildren<ScrollContentPresenter>(Gallery).FirstOrDefault() is not { } viewport) return;
+            var top = container.TranslatePoint(new Point(), viewport).Y;
+            scroll.ScrollToVerticalOffset(Math.Max(0, scroll.VerticalOffset + top));
+        }, DispatcherPriority.Loaded);
+    }
+    private void RestoreGalleryReflowFocus(ResultTile tile, Button previousButton, int version)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (version != _sheetVersion || !Gallery.IsVisible) return;
+            // A reflow removes the focused button. Restore that file, but never take
+            // focus back from a control the user selected while layout was settling.
+            if (Keyboard.FocusedElement is Visual current && !ReferenceEquals(current, previousButton) &&
+                !ReferenceEquals(current, Gallery) && !ReferenceEquals(current, this) && PresentationSource.FromVisual(current) is not null) return;
+            VisualChildren<Button>(Gallery).FirstOrDefault(button => ReferenceEquals(button.DataContext, tile))?.Focus();
+        }, DispatcherPriority.Loaded);
+    }
+    private void QueueThumbnailReflow()
+    {
+        if (_aspectReflowQueued) return;
+        _aspectReflowQueued = true;
+        Dispatcher.BeginInvoke(() => { _aspectReflowQueued = false; if (!_closing) ArrangeRows(true); }, DispatcherPriority.ContextIdle);
     }
     private void GalleryScrollToTop()
     {
@@ -152,6 +233,7 @@ public partial class MainWindow
         ListViewButton.SetResourceReference(BackgroundProperty, _listMode ? "TintBrush" : "SurfaceBrush");
     }
     private void WindowSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); ArrangeRows(); ArrangePeopleRows(); }
+    private void GallerySizeChanged(object sender, SizeChangedEventArgs e) => Dispatcher.BeginInvoke(() => ArrangeRows(), DispatcherPriority.Loaded);
     private void ResultsSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); ArrangeRows(); }
     private void ApplyResponsiveLayout()
     {
@@ -160,7 +242,7 @@ public partial class MainWindow
         var compact = ActualWidth < 1200;
         var detailOnly = compact && hasPreview;
         if (detailOnly && !_compactPreview)
-            _returnAnchor = GalleryLayout.GetAnchorIndex(VisualChildren<ScrollViewer>(Gallery).FirstOrDefault()?.VerticalOffset ?? 0, _columns, _galleryMetrics.RowExtent);
+            _returnAnchor = GetGalleryAnchor();
         var restore = _compactPreview && !detailOnly; _compactPreview = detailOnly;
         LibraryResultsPanel.Visibility = detailOnly ? Visibility.Collapsed : Visibility.Visible;
         GalleryColumn.Width = detailOnly ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
@@ -168,14 +250,14 @@ public partial class MainWindow
         PreviewColumn.MinWidth = hasPreview && !compact ? 300 : 0;
         PreviewColumn.MaxWidth = hasPreview && !compact ? 480 : double.PositiveInfinity;
         if (!_resizingInspector || compact) PreviewColumn.Width = !hasPreview ? new GridLength(0) : compact ? new GridLength(1, GridUnitType.Star) : new GridLength(_inspectorWidth);
-        SplitterColumn.Width = hasPreview && !compact ? new GridLength(12) : new GridLength(0);
+        SplitterColumn.Width = hasPreview && !compact ? new GridLength(16) : new GridLength(0);
         PreviewSplitter.Visibility = hasPreview && !compact ? Visibility.Visible : Visibility.Collapsed;
         PreviewBackButton.Visibility = detailOnly ? Visibility.Visible : Visibility.Collapsed;
         SearchHeadingRow.Visibility = detailOnly ? Visibility.Collapsed : Visibility.Visible;
         PaginationBar.Visibility = detailOnly || _status.FileCount == 0 ? Visibility.Collapsed : Visibility.Visible;
         var timedMedia = _preview?.Kind is FileKind.Video or FileKind.Audio;
         var mediaHeight = timedMedia
-            ? Math.Min(ActualHeight < 650 ? 72 : ActualHeight < 820 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - (ActualHeight < 650 ? 330 : 240)))
+            ? Math.Min(ActualHeight < 650 ? 104 : ActualHeight < 820 ? 180 : 240, Math.Max(64, ResultsArea.ActualHeight - 260))
             : Math.Min(ActualHeight < 650 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 192));
         PreviewMediaRow.Height = new GridLength(_preview?.Kind == FileKind.Document && PreviewImage.Source is null ? 0 : mediaHeight);
         MomentsHeading.Margin = timedMedia && ActualHeight < 820 ? new Thickness(0, 8, 0, 8) : new Thickness(0, 16, 0, 12);
@@ -185,14 +267,14 @@ public partial class MainWindow
         PeopleResultsPanel.Visibility = _personInspectorOpen && compact ? Visibility.Collapsed : Visibility.Visible;
         PersonBackButton.Visibility = _personInspectorOpen && compact ? Visibility.Visible : Visibility.Collapsed;
         PersonInspector.Margin = new Thickness(_personInspectorOpen && !compact ? 12 : 0, 0, 0, 0);
-        foreach (var button in new[] { SearchNav, PeopleNav, FoldersNav, PrepareNav, ThemeButton, UpdatesButton }) { button.MinHeight = ActualHeight < 650 ? 32 : 40; button.Padding = new Thickness(12, ActualHeight < 650 ? 6 : 9, 12, ActualHeight < 650 ? 6 : 9); }
+        foreach (var button in new[] { SearchNav, PeopleNav, FoldersNav, PrepareNav }) { button.MinHeight = 32; button.Padding = new Thickness(10, 6, 10, 6); }
         DriveLocation.Visibility = ActualHeight < 650 ? Visibility.Collapsed : Visibility.Visible;
-        PortableHint.Padding = ActualHeight < 650 ? new Thickness(12, 8, 8, 8) : new Thickness(12, 18, 8, 16);
+        PortableHint.Padding = ActualHeight < 650 ? new Thickness(10, 8, 8, 8) : new Thickness(10, 12, 8, 10);
         EmptyIcon.Visibility = ActualHeight < 650 ? Visibility.Collapsed : Visibility.Visible;
         EmptyTitle.FontSize = ActualHeight < 650 ? 20 : 22;
         UpdateViewButtons();
         if (restore)
-            Dispatcher.BeginInvoke(() => { ArrangeRows(); VisualChildren<ScrollViewer>(Gallery).FirstOrDefault()?.ScrollToVerticalOffset(GalleryLayout.GetAnchorOffset(_returnAnchor, _columns, _galleryMetrics.RowExtent)); }, DispatcherPriority.Loaded);
+            Dispatcher.BeginInvoke(() => { ArrangeRows(); ScrollGalleryToAnchor(_returnAnchor); }, DispatcherPriority.Loaded);
     }
     private void PreviewResizeStarted(object sender, DragStartedEventArgs e) => _resizingInspector = true;
     private void PreviewResized(object sender, DragCompletedEventArgs e) { _inspectorWidth = Math.Clamp(PreviewColumn.ActualWidth, 300, 480); _resizingInspector = false; ApplyResponsiveLayout(); ArrangeRows(true); }
@@ -205,7 +287,7 @@ public partial class MainWindow
             if (tile is null) return;
             if (_listMode) { MetadataList.ScrollIntoView(tile); MetadataList.Focus(); return; }
             var index = CurrentTiles.IndexOf(tile);
-            if (Rows.ElementAtOrDefault(index / Math.Max(1, _columns)) is { } row) Gallery.ScrollIntoView(row);
+            if (Rows.ElementAtOrDefault(ContactSheetLayout.GetRowIndex(_sheetRows, index)) is { } row) Gallery.ScrollIntoView(row);
             Dispatcher.BeginInvoke(() => VisualChildren<Button>(Gallery).FirstOrDefault(b => ReferenceEquals(b.DataContext, tile))?.Focus(), DispatcherPriority.Loaded);
         }, DispatcherPriority.Loaded);
     }
@@ -221,6 +303,7 @@ public partial class MainWindow
     {
         _personTiles.Clear();
         _personTiles.AddRange(_people.Select(p => new PersonTile { Person = p, IsSelected = p.Id == _editingPerson?.Id }));
+        _peopleRowsDirty = true;
         ArrangePeopleRows(true);
     }
     private void PeopleSizeChanged(object sender, SizeChangedEventArgs e) => ArrangePeopleRows();
@@ -231,7 +314,8 @@ public partial class MainWindow
         var columns = Math.Max(1, (int)((width + 12) / 176));
         var tileWidth = Math.Floor((width - (columns - 1) * 12) / columns);
         foreach (var tile in _personTiles) tile.TileWidth = tileWidth;
-        if (!force && _peopleColumns == columns) return;
+        if (!force && !_peopleRowsDirty && _peopleColumns == columns) return;
+        _peopleRowsDirty = false;
         _peopleColumns = columns; PeopleRows.Clear();
         for (var i = 0; i < _personTiles.Count; i += columns) PeopleRows.Add(new(_personTiles.Skip(i).Take(columns).ToArray()));
     }
@@ -242,7 +326,29 @@ public partial class MainWindow
         foreach (var tile in _personTiles) tile.IsSelected = tile.Person.Id == _editingPerson?.Id;
         ApplyResponsiveLayout(); ArrangePeopleRows();
     }
-    private void ClosePersonClick(object sender, RoutedEventArgs e) { _personInspectorOpen = false; ApplyResponsiveLayout(); ArrangePeopleRows(); PeopleGallery.Focus(); }
+    private void ClosePersonClick(object sender, RoutedEventArgs e)
+    {
+        if (!TryLeavePersonEditor()) return;
+        _personInspectorOpen = false; ApplyResponsiveLayout(); ArrangePeopleRows(); RestorePersonFocus();
+    }
+    private void RestorePersonFocus()
+    {
+        var selected = _editingPerson?.Id;
+        Dispatcher.BeginInvoke(() =>
+        {
+            ArrangePeopleRows();
+            if (!PeopleResultsPanel.IsVisible || _personInspectorOpen) return;
+            var tile = _personTiles.FirstOrDefault(person => person.Person.Id == selected);
+            if (tile is null) { PeopleGallery.Focus(); return; }
+            var index = _personTiles.IndexOf(tile);
+            if (PeopleRows.ElementAtOrDefault(index / Math.Max(1, _peopleColumns)) is { } row) PeopleGallery.ScrollIntoView(row);
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (!PeopleResultsPanel.IsVisible || _personInspectorOpen) return;
+                VisualChildren<Button>(PeopleGallery).FirstOrDefault(button => button.DataContext is PersonTile candidate && candidate.Person.Id == selected)?.Focus();
+            }, DispatcherPriority.Loaded);
+        }, DispatcherPriority.Loaded);
+    }
     private async void PersonTileLoaded(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not PersonTile tile || tile.Portrait is not null || _portraitRequests.ContainsKey(tile)) return;
@@ -272,6 +378,8 @@ public partial class MainWindow
             var state = await player.GetStateAsync();
             if (!ReferenceEquals(player, _player) || !ReferenceEquals(selected, _selectedResult)) return;
             PreviewTime.Text = $"{FormatTime(state.PositionMs)} / {FormatTime(state.DurationMs)}";
+            PlayPauseButton.Content = state.Playing ? "Pause" : "Play";
+            AutomationProperties.SetName(PlayPauseButton, state.Playing ? "Pause playback" : "Play playback");
             PlaybackSeek.Maximum = Math.Max(1, state.DurationMs);
             if (!_seeking) PlaybackSeek.Value = state.PositionMs;
             PlaybackSeek.IsEnabled = state.DurationMs > 0;
