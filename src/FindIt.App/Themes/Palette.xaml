@@ -1,0 +1,23 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <FontFamily x:Key="AppFont">pack://application:,,,/Assets/Fonts/#IBM Plex Sans</FontFamily>
+  <SolidColorBrush x:Key="CanvasBrush" Color="#F6F7F9"/>
+  <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="SidebarBrush" Color="#F0F2F5"/>
+  <SolidColorBrush x:Key="InkBrush" Color="#17212D"/>
+  <SolidColorBrush x:Key="MutedBrush" Color="#667180"/>
+  <SolidColorBrush x:Key="BorderBrush" Color="#E3E7ED"/>
+  <SolidColorBrush x:Key="AccentBrush" Color="#3D65D8"/>
+  <SolidColorBrush x:Key="AccentButtonBrush" Color="#3D65D8"/>
+  <SolidColorBrush x:Key="AccentButtonForegroundBrush" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="AccentTextBrush" Color="#3D65D8"/>
+  <SolidColorBrush x:Key="FocusBrush" Color="#3D65D8"/>
+  <SolidColorBrush x:Key="TintBrush" Color="#E9EEFC"/>
+  <SolidColorBrush x:Key="HoverBrush" Color="#EAEDF2"/>
+  <SolidColorBrush x:Key="PreviewBrush" Color="#ECEFF3"/>
+  <SolidColorBrush x:Key="ReadyBrush" Color="#177565"/>
+  <SolidColorBrush x:Key="WarningBrush" Color="#945A0D"/>
+  <SolidColorBrush x:Key="WarningTintBrush" Color="#FFF3DB"/>
+  <SolidColorBrush x:Key="ErrorBrush" Color="#B53838"/>
+  <SolidColorBrush x:Key="ErrorTintBrush" Color="#FCECEC"/>
+  <SolidColorBrush x:Key="ShadowBrush" Color="#1F17212D"/>
+</ResourceDictionary>

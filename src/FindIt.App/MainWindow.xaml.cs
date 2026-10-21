@@ -51,7 +51,8 @@ public partial class MainWindow : Window
         _root = Path.GetFullPath(rootPath ?? backend?.RootPath ?? AppContext.BaseDirectory);
         _thumbnails = new(_root);
         InitializeComponent();
-        SetDarkTheme(Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is int preference && preference == 0);
+        _uiReady = true;
+        InitializeAppearance();
         DataContext = this;
         PreparationFolders.ItemsSource = _preparationFolders;
         AutomationProperties.SetLiveSetting(NoticeText, AutomationLiveSetting.Polite);
@@ -67,7 +68,7 @@ public partial class MainWindow : Window
         FolderFilter.ItemsSource = new[] { new FolderChoice("All folders", null) }; FolderFilter.SelectedIndex = 0;
         PersonFilter.ItemsSource = new[] { new PersonChip(Guid.Empty, "Anyone") }; PersonFilter.SelectedIndex = 0;
         Navigate("search");
-        if (_backend is null) { FooterStatus.Text = "Opening archive…"; StartPreparationButton.IsEnabled = false; return; }
+        if (_backend is null) { FooterStatus.Text = "Opening archive…"; EmptyTitle.Text = "Opening your archive"; EmptyDescription.Text = "Reading the library on this drive. Your files will appear here shortly."; EmptyAction.IsEnabled = false; StartPreparationButton.IsEnabled = false; return; }
         StartPreparationButton.IsEnabled = true;
         await RefreshStatusAsync();
         await LoadPeopleAsync();
@@ -83,10 +84,11 @@ public partial class MainWindow : Window
         _backend = backend;
         await InitializeAsync();
     }
-    public void ShowRenderPage(string page) { Navigate(page); FooterStatus.Text = "UI preview · no archive opened"; }
-    public async Task RenderArchiveAsync(string? query, bool previewFirst, string? kind = null, bool selectPerson = false)
+    public void ShowRenderPage(string page) { Navigate(page); if (_backend is null) { UpdateEmptyState(); EmptyAction.IsEnabled = true; } FooterStatus.Text = "UI preview · no archive opened"; }
+    public async Task RenderArchiveAsync(string? query, bool previewFirst, string? kind = null, bool selectPerson = false, bool exact = false)
     {
         _initialized = false;
+        ExactFilter.IsChecked = exact;
         KindFilter.SelectedIndex = kind?.ToLowerInvariant() switch { "photo" or "image" => 1, "video" => 2, "document" => 3, "audio" => 4, _ => 0 };
         _initialized = true;
         QueryBox.Text = query ?? "";
@@ -112,11 +114,11 @@ public partial class MainWindow : Window
         PreparePage.Visibility = page == "prepare" ? Visibility.Visible : Visibility.Collapsed;
         foreach (var (button, name) in new[] { (SearchNav, "search"), (PeopleNav, "people"), (FoldersNav, "folders"), (PrepareNav, "prepare") })
         {
-            button.SetResourceReference(BackgroundProperty, page == name ? "TintBrush" : "CanvasBrush");
+            button.SetResourceReference(BackgroundProperty, page == name ? "TintBrush" : "SidebarBrush");
             button.SetResourceReference(ForegroundProperty, page == name ? "AccentBrush" : "InkBrush");
             button.FontWeight = page == name ? FontWeights.SemiBold : FontWeights.Normal;
         }
-        if (page != "search") StopPlayback();
+        FiltersPopup.IsOpen = false; if (page != "search") StopPlayback(); ApplyResponsiveLayout();
     }
     private void SearchNavClick(object sender, RoutedEventArgs e) { Navigate("search"); QueryBox.Focus(); }
     private async void PeopleNavClick(object sender, RoutedEventArgs e) { Navigate("people"); await LoadPeopleAsync(); }
@@ -141,13 +143,14 @@ public partial class MainWindow : Window
             ConnectionLabel.Text = !_status.Connected ? "Drive disconnected" : _status.IsPreparing ? "Preparing" : _status.FileCount > 0 ? "Ready to search" : "Not prepared yet";
             ConnectionDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, _status.Connected ? "ReadyBrush" : "MutedBrush");
             FooterStatus.Text = !_status.Connected ? "Reconnect this drive to continue." : $"{_status.FileCount:N0} files · {_status.SegmentCount:N0} searchable moments · {FormatBytes(_status.TotalBytes)}";
-            FolderList.ItemsSource = _status.Folders;
+            FolderList.ItemsSource = _status.Folders; FolderEmpty.Visibility = _status.Folders.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             CapabilitiesList.ItemsSource = _status.Capabilities;
             IssuesList.ItemsSource = _status.Issues;
             IssuesHeading.Text = _status.Issues.Count == 0 ? "No files need attention" : $"{_status.Issues.Count:N0} files needing attention";
-            var selectedFolder = (FolderFilter.SelectedItem as FolderChoice)?.Path;
+            var selectedFolder = (FolderFilter.SelectedItem as FolderChoice)?.Path ?? _filters.Folder;
             _initialized = false;
             var choices = new[] { new FolderChoice("All folders", null) }.Concat(_status.Folders.Select(f => new FolderChoice(f.RelativePath, f.RelativePath))).ToArray();
+            if (selectedFolder is not null && !choices.Any(f => f.Path == selectedFolder)) choices = choices.Append(new FolderChoice(selectedFolder, selectedFolder)).ToArray();
             FolderFilter.ItemsSource = choices; FolderFilter.SelectedItem = choices.FirstOrDefault(f => f.Path == selectedFolder) ?? choices[0];
             _initialized = true;
             if (!_status.Connected)
@@ -180,40 +183,39 @@ public partial class MainWindow : Window
         try
         {
             _people = await _backend.GetPeopleAsync();
-            PeopleList.ItemsSource = _people;
+            PeopleList.ItemsSource = _people; RefreshPeopleGallery();
             PeopleEmpty.Visibility = _people.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            var selected = (PersonFilter.SelectedItem as PersonChip)?.PersonId;
+            var selectedPerson = PersonFilter.SelectedItem as PersonChip;
+            var selected = selectedPerson?.PersonId ?? _filters.PersonId;
             var chips = new[] { new PersonChip(Guid.Empty, "Anyone") }.Concat(_people.Select(p => new PersonChip(p.Id, p.Name))).ToArray();
+            if (selectedPerson is { PersonId: var selectedId } && selectedId != Guid.Empty && !chips.Any(p => p.PersonId == selectedId)) chips = chips.Append(selectedPerson).ToArray();
             var wasInitialized = _initialized; _initialized = false;
             PersonFilter.ItemsSource = chips; PersonFilter.SelectedItem = chips.FirstOrDefault(p => p.PersonId == selected) ?? chips[0];
-            _initialized = wasInitialized;
+            _initialized = wasInitialized; CaptureFilterState(); UpdateFilterUi();
         }
         catch (Exception ex) { Notice($"Could not read people: {ex.Message}"); }
     }
 
-    private SearchFilters ReadFilters()
-    {
-        DateTimeOffset? after = DateFilter.SelectedIndex switch { 1 => DateTimeOffset.Now.AddDays(-30), 2 => new DateTimeOffset(new DateTime(DateTime.Now.Year, 1, 1), TimeZoneInfo.Local.GetUtcOffset(DateTime.Now)), _ => null };
-        var person = (PersonFilter.SelectedItem as PersonChip)?.PersonId;
-        if (DateFilter.SelectedIndex == 3 && AfterDate.SelectedDate is DateTime afterDate) after = new DateTimeOffset(afterDate, TimeZoneInfo.Local.GetUtcOffset(afterDate));
-        DateTimeOffset? before = DateFilter.SelectedIndex == 3 && BeforeDate.SelectedDate is DateTime beforeDate ? new DateTimeOffset(beforeDate.AddDays(1), TimeZoneInfo.Local.GetUtcOffset(beforeDate)) : null;
-        return new() { Kind = KindFilter.SelectedIndex switch { 1 => FileKind.Image, 2 => FileKind.Video, 3 => FileKind.Document, 4 => FileKind.Audio, _ => null }, AfterUtc = after?.ToUniversalTime(), BeforeUtc = before?.ToUniversalTime(), Folder = (FolderFilter.SelectedItem as FolderChoice)?.Path, PersonIds = person is not null && person != Guid.Empty ? [person.Value] : [], ExactOnly = ExactFilter.IsChecked == true };
-    }
+    private SearchFilters ReadFilters() => _filters.ToSearchFilters(DateTimeOffset.Now, TimeZoneInfo.Local);
 
     private async Task SearchAsync(bool reset, int? targetPage = null)
     {
         if (_backend is null || _closing) return;
+        CaptureFilterState();
+        if (_filters.ValidateDateRange() is { } validation) { Notice(validation); return; }
+        UpdateFilterUi();
         _searchCancellation?.Cancel(); _searchCancellation?.Dispose();
         var cancellation = _searchCancellation = new();
         if (reset) { _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null; ClosePreview(); }
         if (targetPage is int page) _page = page;
-        _searching = true; ResultCount.Text = "Searching…";
+        if (reset) _submittedQuery = QueryBox.Text.Trim();
+        _searching = true; SearchProgress.Visibility = Visibility.Visible; ResultCount.Text = "Searching…";
         PreviousPageButton.IsEnabled = NextPageButton.IsEnabled = false;
         try
         {
             if (!_pages.TryGetValue(_page, out var response))
             {
-                response = await _backend.SearchAsync(new() { Query = QueryBox.Text.Trim(), Filters = ReadFilters(), Limit = 256, Cursor = _pageCursors.ElementAtOrDefault(_page), GenerationId = _searchGeneration }, cancellation.Token);
+                response = await _backend.SearchAsync(new() { Query = _submittedQuery, Filters = ReadFilters(), Limit = 256, Cursor = _pageCursors.ElementAtOrDefault(_page), GenerationId = _searchGeneration }, cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
                 _searchGeneration = response.GenerationId;
                 _pages[_page] = response; _pageLru.Enqueue(_page);
@@ -222,17 +224,17 @@ public partial class MainWindow : Window
             }
             CurrentTiles.Clear();
             foreach (var result in response.Results) CurrentTiles.Add(new ResultTile { Result = result });
-            ArrangeRows(true);
+            ArrangeRows(true); GalleryScrollToTop();
             EmptyState.Visibility = CurrentTiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             if (CurrentTiles.Count == 0) UpdateEmptyState();
             var first = _page * 256 + 1; var last = _page * 256 + CurrentTiles.Count;
-            ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")} · {response.ElapsedMilliseconds:N0} ms{(response.SemanticUsed ? " · Semantic search" : "")}";
+            ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")}{(response.NextCursor is not null && response.TotalCount is null ? " · More results available" : "")}";
             PreviousPageButton.IsEnabled = _page > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
             if (!string.IsNullOrWhiteSpace(response.Notice)) Notice(response.Notice); else if (!_status.IsPreparing) HideNotice(true);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!cancellation.IsCancellationRequested) { Notice($"Search could not finish: {ex.Message}"); ResultCount.Text = "Search interrupted. Your query is preserved."; } }
-        finally { if (ReferenceEquals(cancellation, _searchCancellation)) _searching = false; }
+        finally { if (ReferenceEquals(cancellation, _searchCancellation)) { _searching = false; SearchProgress.Visibility = Visibility.Collapsed; } }
     }
 
     private async void TileLoaded(object sender, RoutedEventArgs e)
@@ -240,14 +242,14 @@ public partial class MainWindow : Window
         if ((sender as FrameworkElement)?.DataContext is not ResultTile tile || tile.Thumbnail is not null || _thumbnailRequests.ContainsKey(tile)) return;
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_searchCancellation?.Token ?? CancellationToken.None);
         _thumbnailRequests[tile] = cancellation;
-        try { tile.Thumbnail = await _thumbnails.ReadAsync(tile.Result.Thumbnail, cancellation.Token); }
+        try { var thumbnail = await _thumbnails.ReadAsync(tile.Result.Thumbnail, cancellation.Token); if (!cancellation.IsCancellationRequested) tile.Thumbnail = thumbnail; }
         catch (OperationCanceledException) { }
         finally { if (_thumbnailRequests.TryGetValue(tile, out var active) && ReferenceEquals(active, cancellation)) _thumbnailRequests.Remove(tile); cancellation.Dispose(); }
     }
     private void TileUnloaded(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not ResultTile tile) return;
-        if (_thumbnailRequests.TryGetValue(tile, out var request)) request.Cancel();
+        if (_thumbnailRequests.Remove(tile, out var request)) request.Cancel();
         tile.Thumbnail = null;
     }
 
@@ -269,64 +271,8 @@ public partial class MainWindow : Window
         finally { _playbackGate.Release(); }
     }
 
-    private void ArrangeRows(bool force = false)
-    {
-        var scroll = VisualChildren<ScrollViewer>(Gallery).FirstOrDefault();
-        var available = Math.Max(160, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - 8);
-        var count = Math.Max(1, (int)Math.Floor(available / 200));
-        var width = Math.Floor(available / count) - 12;
-        if (!force && count == _columns) { foreach (var tile in CurrentTiles) tile.TileWidth = width; return; }
-        var previousColumns = Math.Max(1, _columns);
-        var anchorIndex = (int)Math.Floor((scroll?.VerticalOffset ?? 0) / 211) * previousColumns;
-        _columns = count;
-        Rows.Clear();
-        foreach (var tile in CurrentTiles) tile.TileWidth = width;
-        for (var index = 0; index < CurrentTiles.Count; index += count) Rows.Add(new(CurrentTiles.Skip(index).Take(count).ToArray()));
-        if (scroll is not null && anchorIndex > 0) Dispatcher.BeginInvoke(() => scroll.ScrollToVerticalOffset((anchorIndex / count) * 211), DispatcherPriority.Loaded);
-    }
-    private void ResultsSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); ArrangeRows(); }
-    private void ApplyResponsiveLayout()
-    {
-        if (SearchTitle is null) return;
-        var compact = ActualHeight < 820 && _status.FileCount > 0;
-        var shortPreview = ActualHeight < 650 && _preview is not null;
-        var unprepared = _status.FileCount == 0;
-        SearchTitle.FontSize = compact ? 22 : 27;
-        SearchTitle.Visibility = shortPreview ? Visibility.Collapsed : Visibility.Visible;
-        SearchHeadingRow.Visibility = PaginationBar.Visibility = unprepared ? Visibility.Collapsed : Visibility.Visible;
-        QueryToolsPanel.Visibility = unprepared || shortPreview ? Visibility.Collapsed : Visibility.Visible;
-        var shortWindow = ActualHeight < 650;
-        EmptyIcon.Width = EmptyIcon.Height = shortWindow ? 44 : 72;
-        EmptyTitle.FontSize = shortWindow ? 20 : 22;
-        EmptyTitle.Margin = shortWindow ? new Thickness(0, 12, 0, 8) : new Thickness(0, 22, 0, 9);
-        EmptyDescription.FontSize = shortWindow ? 12 : 14;
-        EmptyDescription.LineHeight = shortWindow ? 20 : 23;
-        EmptyAction.Margin = new Thickness(0, shortWindow ? 16 : 23, 0, 0);
-        PortableHint.Visibility = ActualHeight < 650 ? Visibility.Collapsed : Visibility.Visible;
-        DriveLocation.MaxWidth = Math.Max(120, Math.Min(550, ActualWidth - 690));
-        foreach (var tile in CurrentTiles) tile.ThumbnailHeight = ActualHeight < 650 ? 72 : 148;
-        SearchSubtitle.Visibility = QueryHint.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        QueryToolsPanel.Margin = compact ? new Thickness(0, 14, 0, 12) : new Thickness(0, 22, 0, 19);
-        QueryBox.MinHeight = compact ? 44 : 52; QueryBox.Padding = compact ? new Thickness(16, 8, 16, 8) : new Thickness(16, 12, 16, 12);
-        if (_preview?.Kind is FileKind.Video or FileKind.Audio)
-        {
-            PreviewMediaRow.Height = new GridLength(shortPreview ? 90 : compact ? 120 : 160);
-            MomentsHeading.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-            foreach (var image in VisualChildren<Image>(MomentsList)) if (image.DataContext is SearchMoment moment) { image.Visibility = moment.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible; image.Height = shortPreview ? 30 : compact ? 36 : 70; }
-        }
-    }
-    private void PreviewResized(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e) => ArrangeRows(true);
-    private async void SearchClick(object sender, RoutedEventArgs e) => await SearchAsync(true);
-    private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; await SearchAsync(true); } }
-    private async void FilterChanged(object sender, SelectionChangedEventArgs e) { if (DateRangePanel is not null) DateRangePanel.Visibility = DateFilter.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed; if (_initialized) await SearchAsync(true); }
-    private async void DateRangeChanged(object? sender, SelectionChangedEventArgs e) { if (_initialized && DateFilter.SelectedIndex == 3) await SearchAsync(true); }
-    private async void ExactChanged(object sender, RoutedEventArgs e) { if (_initialized) await SearchAsync(true); }
-    private async void PreviousClick(object sender, RoutedEventArgs e) { if (_page > 0) await SearchAsync(false, _page - 1); }
-    private async void NextClick(object sender, RoutedEventArgs e) { if (_pageCursors.Count > _page + 1) await SearchAsync(false, _page + 1); }
-    private void GridViewClick(object sender, RoutedEventArgs e) { Gallery.Visibility = Visibility.Visible; MetadataList.Visibility = Visibility.Collapsed; ArrangeRows(true); }
-    private void ListViewClick(object sender, RoutedEventArgs e) { Gallery.Visibility = Visibility.Collapsed; MetadataList.Visibility = Visibility.Visible; }
     private async void ResultClick(object sender, RoutedEventArgs e) { if ((sender as FrameworkElement)?.Tag is ResultTile tile) await SelectResultAsync(tile.Result); }
-    private async void ResultSelectionChanged(object sender, SelectionChangedEventArgs e) { if (MetadataList.SelectedItem is ResultTile tile) await SelectResultAsync(tile.Result); }
+    private async void ResultSelectionChanged(object sender, SelectionChangedEventArgs e) { if (MetadataList.SelectedItem is ResultTile tile && tile.Result.FileId != _selectedResult?.FileId) await SelectResultAsync(tile.Result); }
     private void ListDoubleClick(object sender, MouseButtonEventArgs e) { if (_selectedResult is not null) OpenOriginal(); }
 
     private void UpdateEmptyState()
@@ -341,7 +287,7 @@ public partial class MainWindow : Window
     private async void EmptyActionClick(object sender, RoutedEventArgs e)
     {
         if (_status.FileCount == 0) { Navigate("prepare"); return; }
-        _initialized = false; QueryBox.Clear(); KindFilter.SelectedIndex = DateFilter.SelectedIndex = FolderFilter.SelectedIndex = PersonFilter.SelectedIndex = 0; ExactFilter.IsChecked = false; _initialized = true; await SearchAsync(true);
+        QueryBox.Clear(); ResetFilterControls(); await SearchAsync(true);
     }
 
     private async Task SelectResultAsync(SearchResult result, long? segmentId = null)
@@ -349,11 +295,14 @@ public partial class MainWindow : Window
         if (_backend is null) return;
         _previewCancellation?.Cancel(); _previewCancellation?.Dispose();
         var cancellation = _previewCancellation = new();
-        _selectedResult = result; StopPlayback();
+        _selectedResult = result; _lastResultId = result.FileId; _preview = null; StopPlayback();
+        foreach (var tile in CurrentTiles) tile.IsSelected = tile.Result.FileId == result.FileId;
+        MomentsList.ItemsSource = null; MomentsHeading.Visibility = Visibility.Collapsed; PreviewText.Visibility = Visibility.Visible;
         PreviewName.Text = result.Name; PreviewPath.Text = result.RelativePath; PreviewText.Text = result.Snippet;
         PreviewMediaRow.Height = new GridLength(200);
         PreviewImage.Source = null; PreviewPlaceholder.Text = "Loading preview…"; PreviewPlaceholder.Visibility = Visibility.Visible;
-        PreviewPanel.Visibility = Visibility.Visible; PreviewColumn.Width = new GridLength(Math.Min(380, ActualWidth * .32)); SplitterColumn.Width = new GridLength(5);
+        PreviewPanel.Visibility = Visibility.Visible; ApplyResponsiveLayout(); UpdateLayout();
+        PreviewDetails.Text = $"{result.Kind} · {FormatBytes(result.Bytes)} · {result.ModifiedUtc.ToLocalTime():dd MMM yyyy}";
         PossibleMatchBanner.Visibility = result.MatchCategory == MatchCategory.PossiblePersonAction ? Visibility.Visible : Visibility.Collapsed;
         try
         {
@@ -402,11 +351,17 @@ public partial class MainWindow : Window
         try
         {
             token.ThrowIfCancellationRequested();
-            VideoPlayer.Visibility = Visibility.Visible; VideoControls.Visibility = Visibility.Visible; PreviewPlaceholder.Visibility = Visibility.Collapsed;
+            var audioOnly = preview.Kind == FileKind.Audio;
+            VideoPlayer.Width = VideoPlayer.Height = audioOnly ? 1 : double.NaN;
+            VideoPlayer.HorizontalAlignment = audioOnly ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+            VideoPlayer.VerticalAlignment = audioOnly ? VerticalAlignment.Top : VerticalAlignment.Stretch;
+            VideoPlayer.Visibility = Visibility.Visible; VideoControls.Visibility = Visibility.Visible;
+            PreviewPlaceholder.Text = audioOnly ? "♪\nAudio preview" : "Loading preview…";
+            PreviewPlaceholder.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
             VideoPlayer.UpdateLayout();
             _player ??= new PreviewPlayerClient(_root, VideoPlayer.WindowHandle);
             PreviewTime.Text = FormatTime(preview.StartMs ?? 0);
-            await _player.PlayAsync(preview.OriginalPath, preview.StartMs ?? 0, token);
+            await _player.PlayAsync(preview.OriginalPath, preview.StartMs ?? 0, token); StartPlaybackPolling();
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -417,11 +372,11 @@ public partial class MainWindow : Window
         }
         finally { _playbackGate.Release(); }
     }
-    private void StopPlayback() { _ = StopPlaybackAsync(); VideoPlayer.Visibility = Visibility.Collapsed; VideoControls.Visibility = Visibility.Collapsed; }
+    private void StopPlayback() { StopPlaybackPolling(); _ = StopPlaybackAsync(); VideoPlayer.Visibility = Visibility.Collapsed; VideoControls.Visibility = Visibility.Collapsed; }
     private async void PlayPauseClick(object sender, RoutedEventArgs e) { if (_player is null) return; try { await _player.PauseAsync(); } catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); } }
     private async void MomentClick(object sender, RoutedEventArgs e) { if (_selectedResult is not null && (sender as FrameworkElement)?.Tag is SearchMoment moment) await SelectResultAsync(_selectedResult, moment.SegmentId); }
-    private void ClosePreviewClick(object sender, RoutedEventArgs e) => ClosePreview();
-    private void ClosePreview() { _previewCancellation?.Cancel(); StopPlayback(); PreviewPanel.Visibility = Visibility.Collapsed; PreviewColumn.Width = new GridLength(0); SplitterColumn.Width = new GridLength(0); _preview = null; _selectedResult = null; ApplyResponsiveLayout(); ArrangeRows(true); }
+    private void ClosePreviewClick(object sender, RoutedEventArgs e) => ClosePreview(true);
+    private void ClosePreview(bool restoreFocus = false) { _previewCancellation?.Cancel(); StopPlayback(); _preview = null; _selectedResult = null; MetadataList.SelectedItem = null; foreach (var tile in CurrentTiles) tile.IsSelected = false; ApplyResponsiveLayout(); ArrangeRows(true); if (restoreFocus) RestoreResultFocus(); }
     private void OpenOriginalClick(object sender, RoutedEventArgs e) => OpenOriginal();
     private void OpenOriginal()
     {
@@ -434,13 +389,13 @@ public partial class MainWindow : Window
         catch (Exception ex) { Notice($"Could not open folder: {ex.Message}"); }
     }
 
-    private void AddPersonClick(object sender, RoutedEventArgs e) { _editingPerson = null; PeopleList.SelectedItem = null; PersonHeading.Text = "Add a person"; PersonName.Clear(); PersonAliases.Clear(); _references = []; ReferenceCount.Text = "No new photos selected"; PersonObservations.Text = ""; SearchPersonButton.IsEnabled = ReviewFacesButton.IsEnabled = MergePersonButton.IsEnabled = false; PersonName.Focus(); }
+    private void AddPersonClick(object sender, RoutedEventArgs e) { _editingPerson = null; PeopleList.SelectedItem = null; PersonHeading.Text = "Add a person"; PersonName.Clear(); PersonAliases.Clear(); _references = []; ReferenceCount.Text = "No new photos selected"; PersonObservations.Text = ""; SearchPersonButton.IsEnabled = ReviewFacesButton.IsEnabled = MergePersonButton.IsEnabled = false; OpenPersonInspector(); PersonName.Focus(); }
     private void PersonSelected(object sender, SelectionChangedEventArgs e)
     {
         if (PeopleList.SelectedItem is not PersonRecord person) return;
         _editingPerson = person; PersonHeading.Text = "Edit person"; PersonName.Text = person.Name; PersonAliases.Text = string.Join(", ", person.Aliases); _references = []; ReferenceCount.Text = "No new photos selected";
         PersonObservations.Text = $"{person.ObservationCount:N0} face observations. Review uncertain matches before relying on them.";
-        SearchPersonButton.IsEnabled = ReviewFacesButton.IsEnabled = MergePersonButton.IsEnabled = true;
+        SearchPersonButton.IsEnabled = ReviewFacesButton.IsEnabled = MergePersonButton.IsEnabled = true; OpenPersonInspector();
     }
     private void ReferencePhotosClick(object sender, RoutedEventArgs e)
     {
@@ -542,7 +497,7 @@ public partial class MainWindow : Window
             move.Click += async (_, _) =>
             {
                 var name = newName.Text.Trim();
-                if (name.Length is 0 or > 160 || name.Any(char.IsControl)) { MessageBox.Show(dialog, "Enter a name between 1 and 160 characters without control characters.", "Move selected faces"); newName.Focus(); return; }
+                if (name.Length is 0 or > 160 || name.Any(char.IsControl)) { ThemedDialog.Show(dialog, "Enter a name between 1 and 160 characters without control characters.", "Move selected faces"); newName.Focus(); return; }
                 var ids = selected.ToArray(); if (ids.Length == 0) return;
                 panel.IsEnabled = false;
                 try
@@ -555,7 +510,7 @@ public partial class MainWindow : Window
                     PeopleList.SelectedItem = _people.FirstOrDefault(item => item.Id == person.Id);
                     Notice($"Moved {ids.Length:N0} face{(ids.Length == 1 ? "" : "s")} to {saved.Name}.");
                 }
-                catch (Exception ex) { MessageBox.Show(dialog, ex.Message, "Move selected faces"); }
+                catch (Exception ex) { ThemedDialog.Show(dialog, ex.Message, "Move selected faces"); }
                 finally { panel.IsEnabled = true; }
             };
             save.Click += async (_, _) =>
@@ -563,7 +518,7 @@ public partial class MainWindow : Window
                 if (selected.Count > 0 || !decisions.Any(decision => decision.Value is 1 or 2)) return;
                 panel.IsEnabled = false;
                 try { await _backend.SavePersonAsync(new() { PersonId = person.Id, Name = person.Name, Aliases = person.Aliases, ConfirmObservationIds = decisions.Where(d => d.Value == 1).Select(d => d.Key).ToArray(), RejectObservationIds = decisions.Where(d => d.Value == 2).Select(d => d.Key).ToArray() }); dialog.Close(); Notice("Face corrections saved."); await LoadPeopleAsync(); }
-                catch (Exception ex) { MessageBox.Show(dialog, ex.Message, "Save corrections"); panel.IsEnabled = true; }
+                catch (Exception ex) { ThemedDialog.Show(dialog, ex.Message, "Save corrections"); panel.IsEnabled = true; }
             };
             ShowPage();
             dialog.ShowDialog();
@@ -577,7 +532,7 @@ public partial class MainWindow : Window
     }
     private async void MomentThumbnailLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is Image { DataContext: SearchMoment moment } image) { image.Visibility = moment.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible; image.Height = ActualHeight < 650 ? 30 : ActualHeight < 820 ? 36 : 70; await FillPortraitAsync(image, moment.Thumbnail); }
+        if (sender is Image { DataContext: SearchMoment moment } image) { image.Visibility = moment.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible; image.Height = 48; await FillPortraitAsync(image, moment.Thumbnail); }
     }
     private void MergePersonClick(object sender, RoutedEventArgs e)
     {
@@ -591,10 +546,16 @@ public partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = "Their reference photos and face matches will be combined.", TextWrapping = TextWrapping.Wrap });
         var button = new Button { Content = "Merge people", Margin = new(0, 20, 0, 0) }; panel.Children.Add(button);
         var dialog = CreateDialog("Merge people", panel, 420, 280);
-        button.Click += async (_, _) => { if (combo.SelectedItem is not PersonRecord target) return; button.IsEnabled = false; try { await _backend.SavePersonAsync(new() { PersonId = source.Id, Name = source.Name, MergeIntoPersonId = target.Id }); dialog.Close(); await LoadPeopleAsync(); PeopleList.SelectedItem = _people.FirstOrDefault(person => person.Id == target.Id); Notice($"Merged {source.Name} into {target.Name}."); } catch (Exception ex) { MessageBox.Show(dialog, ex.Message, "Merge people"); button.IsEnabled = true; } };
+        button.Click += async (_, _) => { if (combo.SelectedItem is not PersonRecord target) return; button.IsEnabled = false; try { await _backend.SavePersonAsync(new() { PersonId = source.Id, Name = source.Name, MergeIntoPersonId = target.Id }); dialog.Close(); await LoadPeopleAsync(); PeopleList.SelectedItem = _people.FirstOrDefault(person => person.Id == target.Id); Notice($"Merged {source.Name} into {target.Name}."); } catch (Exception ex) { ThemedDialog.Show(dialog, ex.Message, "Merge people"); button.IsEnabled = true; } };
         dialog.ShowDialog();
     }
-    private Window CreateDialog(string title, object content, double width, double height) => new() { Owner = this, Title = title, Content = content, Width = width, Height = height, MinWidth = 350, MinHeight = 250, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = (Brush)FindResource("CanvasBrush"), Foreground = (Brush)FindResource("InkBrush"), ShowInTaskbar = false };
+    private Window CreateDialog(string title, object content, double width, double height)
+    {
+        var dialog = new Window { Owner = this, Title = title, Content = content, Width = width, Height = height, MinWidth = 350, MinHeight = 250, MaxWidth = Math.Max(350, SystemParameters.WorkArea.Width - 24), MaxHeight = Math.Max(250, SystemParameters.WorkArea.Height - 24), WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
+        dialog.SetResourceReference(BackgroundProperty, "CanvasBrush");
+        dialog.SetResourceReference(ForegroundProperty, "InkBrush");
+        return dialog;
+    }
 
     private async void FolderDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -644,18 +605,37 @@ public partial class MainWindow : Window
 
     private void WindowKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.K && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { if (ActualHeight < 650) ClosePreview(); Navigate("search"); QueryBox.Focus(); QueryBox.SelectAll(); e.Handled = true; }
-        else if (e.Key == Key.Escape) { ClosePreview(); e.Handled = true; }
+        if (e.Key == Key.K && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { Navigate("search"); QueryBox.Focus(); QueryBox.SelectAll(); e.Handled = true; }
+        else if (e.Key == Key.Escape)
+        {
+            if (FiltersPopup.IsOpen) FiltersPopup.IsOpen = false;
+            else if (PeoplePage.Visibility == Visibility.Visible) ClosePersonClick(this, e);
+            else ClosePreview(true);
+            e.Handled = true;
+        }
         else if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && _selectedResult is not null) { OpenOriginal(); e.Handled = true; }
         else if (Keyboard.FocusedElement is Button { DataContext: ResultTile current } && e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End)
         {
-            var currentIndex = CurrentTiles.IndexOf(current);
-            var target = e.Key switch { Key.Left => currentIndex - 1, Key.Right => currentIndex + 1, Key.Up => currentIndex - _columns, Key.Down => currentIndex + _columns, Key.Home => 0, Key.End => CurrentTiles.Count - 1, _ => currentIndex };
+            var index = CurrentTiles.IndexOf(current);
+            var columns = Math.Max(1, _columns);
+            var target = e.Key switch { Key.Left => index - 1, Key.Right => index + 1, Key.Up => index - columns, Key.Down => index + columns, Key.Home => 0, Key.End => CurrentTiles.Count - 1, _ => index };
             if (target >= 0 && target < CurrentTiles.Count)
             {
-                var targetTile = CurrentTiles[target]; var row = Rows[target / Math.Max(1, _columns)];
-                Gallery.ScrollIntoView(row);
-                Dispatcher.BeginInvoke(() => VisualChildren<Button>(Gallery).FirstOrDefault(button => ReferenceEquals(button.DataContext, targetTile))?.Focus(), DispatcherPriority.Loaded);
+                var tile = CurrentTiles[target];
+                Gallery.ScrollIntoView(Rows[target / columns]);
+                Dispatcher.BeginInvoke(() => VisualChildren<Button>(Gallery).FirstOrDefault(button => ReferenceEquals(button.DataContext, tile))?.Focus(), DispatcherPriority.Loaded);
+            }
+            e.Handled = true;
+        }
+        else if (Keyboard.FocusedElement is Button { DataContext: PersonTile person } && e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End)
+        {
+            var index = _personTiles.IndexOf(person);
+            var columns = Math.Max(1, _peopleColumns);
+            var target = e.Key switch { Key.Left => index - 1, Key.Right => index + 1, Key.Up => index - columns, Key.Down => index + columns, Key.Home => 0, Key.End => _personTiles.Count - 1, _ => index };
+            if (target >= 0 && target < _personTiles.Count)
+            {
+                var tile = _personTiles[target]; PeopleGallery.ScrollIntoView(PeopleRows[target / columns]);
+                Dispatcher.BeginInvoke(() => VisualChildren<Button>(PeopleGallery).FirstOrDefault(button => ReferenceEquals(button.DataContext, tile))?.Focus(), DispatcherPriority.Loaded);
             }
             e.Handled = true;
         }
@@ -667,30 +647,6 @@ public partial class MainWindow : Window
             var child = VisualTreeHelper.GetChild(element, index);
             if (child is T item) yield return item;
             foreach (var descendant in VisualChildren<T>(child)) yield return descendant;
-        }
-    }
-    private void ThemeClick(object sender, RoutedEventArgs e)
-    {
-        SetDarkTheme(!_dark);
-    }
-    public void SetDarkTheme(bool dark)
-    {
-        _dark = dark;
-        var values = _dark ? new[] { "#18212D", "#212D3C", "#EDF2F8", "#B0BDD0", "#39495D", "#7099FF", "#293F68", "#79CCB6" } : new[] { "#F3F6F9", "#FFFFFF", "#223248", "#52647C", "#D8E1EB", "#2856CF", "#E9EFFD", "#187568" };
-        var keys = new[] { "CanvasBrush", "SurfaceBrush", "InkBrush", "MutedBrush", "BorderBrush", "AccentBrush", "TintBrush", "ReadyBrush" };
-        for (var i = 0; i < keys.Length; i++) Application.Current.Resources[keys[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(values[i]));
-        Application.Current.Resources["AccentButtonBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_dark ? "#315DD3" : "#2856CF"));
-        if (SystemParameters.HighContrast)
-        {
-            Application.Current.Resources["CanvasBrush"] = SystemColors.WindowBrush;
-            Application.Current.Resources["SurfaceBrush"] = SystemColors.WindowBrush;
-            Application.Current.Resources["InkBrush"] = SystemColors.WindowTextBrush;
-            Application.Current.Resources["MutedBrush"] = SystemColors.WindowTextBrush;
-            Application.Current.Resources["BorderBrush"] = SystemColors.WindowTextBrush;
-            Application.Current.Resources["AccentBrush"] = SystemColors.HotTrackBrush;
-            Application.Current.Resources["AccentButtonBrush"] = SystemColors.HighlightBrush;
-            Application.Current.Resources["TintBrush"] = SystemColors.ControlBrush;
-            Application.Current.Resources["ReadyBrush"] = SystemColors.WindowTextBrush;
         }
     }
     private void Notice(string message, bool persistent = true)
@@ -732,7 +688,7 @@ public partial class MainWindow : Window
                 var open = new Button { Content = "Open download page", HorizontalAlignment = HorizontalAlignment.Left };
                 panel.Children.Add(open);
                 var dialog = CreateDialog("Application update", panel, 470, 270);
-                open.Click += (_, _) => { try { Process.Start(new ProcessStartInfo(result.DownloadUrl) { UseShellExecute = true }); } catch (Exception ex) { MessageBox.Show(dialog, ex.Message, "Open download page"); } };
+                open.Click += (_, _) => { try { Process.Start(new ProcessStartInfo(result.DownloadUrl) { UseShellExecute = true }); } catch (Exception ex) { ThemedDialog.Show(dialog, ex.Message, "Open download page"); } };
                 dialog.ShowDialog();
             }
         }
@@ -761,7 +717,7 @@ public partial class MainWindow : Window
         if (_closed) return;
         e.Cancel = true;
         if (_closing) return;
-        _closing = true; _statusTimer.Stop(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel(); _prepareCancellation?.Cancel(); _updateCancellation?.Cancel();
+        _closing = true; foreach (var request in _portraitRequests.Values.ToArray()) request.Cancel(); DisposeAppearance(); StopPlaybackPolling(); _statusTimer.Stop(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel(); _prepareCancellation?.Cancel(); _updateCancellation?.Cancel();
         FooterStatus.Text = "Closing archive and releasing this drive…";
         try
         {
@@ -773,7 +729,7 @@ public partial class MainWindow : Window
         if (_ejectRequested)
         {
             var result = await DriveEjector.RequestAsync(_root);
-            MessageBox.Show(this, result.Message, "Eject drive", MessageBoxButton.OK, result.Requested ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            ThemedDialog.Show(this, result.Message, "Eject drive", MessageBoxButton.OK, result.Requested ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         _closed = true; Close();
     }

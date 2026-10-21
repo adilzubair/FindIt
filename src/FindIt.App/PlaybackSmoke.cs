@@ -16,7 +16,7 @@ public partial class MainWindow
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var timer = Stopwatch.StartNew();
         path = Path.GetFullPath(path);
-        PreviewPanel.Visibility = Visibility.Visible; PreviewColumn.Width = new GridLength(380); SplitterColumn.Width = new GridLength(5);
+        _playbackSmoke = true; ApplyResponsiveLayout();
         PreviewName.Text = Path.GetFileName(path); PreviewPath.Text = path; PreviewPlaceholder.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Visible; UpdateLayout();
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Loaded);

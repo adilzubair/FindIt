@@ -21,6 +21,12 @@ public partial class App : Application
             var window = new MainWindow(null, root);
             MainWindow = window;
             window.Show();
+            if (Argument("--interaction-smoke") is { } interactionReport)
+            {
+                await window.RunInteractionSmokeAsync(interactionReport);
+                Shutdown();
+                return;
+            }
             if (Argument("--playback-smoke") is { } mediaPath)
             {
                 await window.RunPlaybackSmokeAsync(mediaPath, Argument("--playback-report") ?? Path.Combine(root, "playback-smoke.json"));
@@ -36,7 +42,7 @@ public partial class App : Application
             {
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 window.ShowRenderPage(Argument("--render-page") ?? "search");
-                if (e.Args.Contains("--render-open-archive")) await window.RenderArchiveAsync(Argument("--render-query"), e.Args.Contains("--render-select-first"), Argument("--render-kind"), e.Args.Contains("--render-person-first"));
+                if (e.Args.Contains("--render-open-archive")) await window.RenderArchiveAsync(Argument("--render-query"), e.Args.Contains("--render-select-first"), Argument("--render-kind"), e.Args.Contains("--render-person-first"), e.Args.Contains("--render-exact"));
                 window.SetDarkTheme(e.Args.Contains("--dark"));
                 if (double.TryParse(Argument("--width"), out var width)) window.Width = width;
                 if (double.TryParse(Argument("--height"), out var height)) window.Height = height;
@@ -61,6 +67,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            if (Argument("--interaction-smoke") is not null) { Shutdown(1); return; }
             if (Argument("--playback-smoke") is not null)
             {
                 var output = Argument("--playback-report") ?? Path.Combine(root, "playback-smoke.json");
@@ -69,7 +76,7 @@ public partial class App : Application
                 Shutdown(1);
                 return;
             }
-            MessageBox.Show($"FindIt could not open this archive.\n\n{root}\n\n{ex.Message}\n\nKeep the drive connected and try again.", "Open archive", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedDialog.Show(null, $"FindIt could not open this archive.\n\n{root}\n\n{ex.Message}\n\nKeep the drive connected and try again.", "Open archive", MessageBoxButton.OK, MessageBoxImage.Warning);
             Shutdown(1);
         }
     }

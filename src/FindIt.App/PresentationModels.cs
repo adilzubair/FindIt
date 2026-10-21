@@ -15,6 +15,8 @@ namespace FindIt.App;
 public sealed class ResultTile : INotifyPropertyChanged
 {
     public required SearchResult Result { get; init; }
+    private bool _isSelected;
+    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; Changed(); } }
     private double _tileWidth = 210;
     public double TileWidth { get => _tileWidth; set { if (Math.Abs(value - _tileWidth) < .5) return; _tileWidth = value; Changed(); } }
     private double _thumbnailHeight = 148;
@@ -27,7 +29,7 @@ public sealed class ResultTile : INotifyPropertyChanged
     public Visibility GlyphVisibility => HasTextPreview ? Visibility.Collapsed : Visibility.Visible;
     public string DateLabel => Result.ModifiedUtc.ToLocalTime().ToString("dd MMM yyyy");
     public string AccessibleName => $"{Result.Name}, {KindLabel}, {Result.RelativePath}. Open preview.";
-    public string Subtitle => Result.MatchCategory == MatchCategory.PossiblePersonAction ? "Possible person/action match" : Result.Moments.FirstOrDefault()?.StartMs is long time ? $"{TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss} · {Result.Moments.Count} matching moments" : DateLabel;
+    public string Subtitle => Result.MatchCategory == MatchCategory.PossiblePersonAction ? "Possible person/action match" : Result.Moments.FirstOrDefault()?.StartMs is long time ? $"{TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss} · {Result.Moments.Count} matching {(Result.Moments.Count == 1 ? "moment" : "moments")}" : $"{KindLabel} · {DateLabel}";
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }
@@ -110,3 +112,19 @@ internal sealed class ThumbnailCache
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder path, uint characters, uint flags);
 }
+
+public sealed class PersonTile : INotifyPropertyChanged
+{
+    public required PersonRecord Person { get; init; }
+    private double _tileWidth = 160;
+    public double TileWidth { get => _tileWidth; set { if (Math.Abs(value - _tileWidth) < .5) return; _tileWidth = value; Changed(); } }
+    private BitmapSource? _portrait;
+    public BitmapSource? Portrait { get => _portrait; set { _portrait = value; Changed(); } }
+    private bool _isSelected;
+    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; Changed(); } }
+    public string Initials => string.Concat(Person.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(name => StringInfo.GetNextTextElement(name))).ToUpperInvariant();
+    public string AccessibleName => $"{Person.Name}, {Person.ObservationCount:N0} observations. Open person details.";
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
+}
+public sealed record PersonRow(IReadOnlyList<PersonTile> Tiles);
