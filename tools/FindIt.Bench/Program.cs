@@ -7,38 +7,12 @@ using FindIt.Runtime;
 string? Option(string name) { var i=Array.IndexOf(args,name);return i>=0&&i+1<args.Length?args[i+1]:null; }
 static double Percentile(IEnumerable<double> values,double percentile) {var a=values.Order().ToArray();return a.Length==0?0:a[Math.Clamp((int)Math.Ceiling(a.Length*percentile)-1,0,a.Length-1)];}
 var root=Option("--root");
+if(args.Contains("--scale-measure")) return await FindIt.Bench.ScaleBenchmark.MeasureChildAsync(args);
+if(args.Contains("--ann-records")) return await FindIt.Bench.ScaleBenchmark.RunAsync(args);
 if(root is null) { Console.Error.WriteLine("Usage: FindIt.Bench --root <drive> [--prepare <folder>] [--queries <text file>] [--output <json>] [--lexical] [--repeat 3] [--ann-records 100000]");return 2; }
 try
 {
     root=Path.GetFullPath(root);
-    if(Option("--ann-records") is { } countText)
-    {
-        int count=int.Parse(countText);if(count<100||count>2_000_000)throw new ArgumentOutOfRangeException("--ann-records");
-        var timer=Stopwatch.StartNew();var random=new Random(42);var vectors=new List<float[]>();
-        var nativePath=Path.Combine(root,"ann-benchmark.usearch");Directory.CreateDirectory(root);
-        using(var index=new NativeVectorIndex(512))
-        {
-            for(int i=0;i<count;i++)
-            {
-                var v=new float[512];double sum=0;for(int d=0;d<v.Length;d++){v[d]=(float)(random.NextDouble()*2-1);sum+=v[d]*v[d];}
-                var scale=(float)(1/Math.Sqrt(sum));for(int d=0;d<v.Length;d++)v[d]*=scale;
-                if(i<100)vectors.Add(v);index.Add((ulong)i,v);
-                if(i>0&&i%10000==0)Console.Error.WriteLine($"Indexed {i:N0}/{count:N0} synthetic vectors");
-            }
-            index.Save(nativePath);
-        }
-        var buildMs=timer.Elapsed.TotalMilliseconds;var elapsed=new List<double>();int selfMatches=0;
-        long residentWhileOpen,privateWhileOpen;
-        using(var index=NativeVectorIndex.Open(nativePath,true))
-        {
-            foreach(var (vector,i) in vectors.Select((v,i)=>(v,i))){timer.Restart();var neighbors=index.Search(vector,50);elapsed.Add(timer.Elapsed.TotalMilliseconds);if(neighbors.Any(n=>n.Key==(ulong)i))selfMatches++;}
-            using var active=Process.GetCurrentProcess();active.Refresh();residentWhileOpen=active.WorkingSet64;privateWhileOpen=active.PrivateMemorySize64;
-        }
-        using var current=Process.GetCurrentProcess();var report=new {kind="synthetic-ann-performance-only",count,dimensions=512,buildMs,indexBytes=new FileInfo(nativePath).Length,p50Ms=Percentile(elapsed,.5),p95Ms=Percentile(elapsed,.95),selfRecall=(double)selfMatches/vectors.Count,residentWhileOpen,privateWhileOpen,peakWorkingSetBytes=current.PeakWorkingSet64,memoryScope="This process, including managed vector generation; resident mapping measured before disposal. Self recall is not Recall@50."};
-        var json=JsonSerializer.Serialize(report,new JsonSerializerOptions(WireJson.Options){WriteIndented=true});Console.WriteLine(json);
-        if(Option("--output")is{}output){Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);await File.WriteAllTextAsync(output,json);}
-        return 0;
-    }
     var launch=Stopwatch.StartNew();await using var backend=await WorkerArchiveClient.CreateAsync(root);
     var startupMs=launch.Elapsed.TotalMilliseconds;var status=await backend.GetStatusAsync();
     if(Option("--prepare") is { } folder)

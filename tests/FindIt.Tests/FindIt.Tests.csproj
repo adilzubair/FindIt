@@ -8,5 +8,6 @@
     <ProjectReference Include="../../src/FindIt.Core/FindIt.Core.csproj" />
     <ProjectReference Include="../../src/FindIt.Client/FindIt.Client.csproj" />
     <ProjectReference Include="../../src/FindIt.Runtime/FindIt.Runtime.csproj" />
+    <ProjectReference Include="../../tools/FindIt.Bench/FindIt.Bench.csproj" />
   </ItemGroup>
 </Project>
