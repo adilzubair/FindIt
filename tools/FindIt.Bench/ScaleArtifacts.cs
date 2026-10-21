@@ -5,7 +5,8 @@ namespace FindIt.Bench;
 
 public sealed record ScaleDataset(int Schema, string Owner, int Count, int Seed, string Distribution, int Dimensions,
     int CommittedRows = 0, string? Sha256 = null);
-public sealed record ScaleIndex(string DatasetSha256, string NativeSha256, long Bytes, string Sha256, double BuildMs);
+public sealed record ScaleIndex(string DatasetSha256, string NativeSha256, long Bytes, string Sha256, double BuildMs,
+    int BuildConcurrency = 1, int BuildBatchRows = 1);
 public sealed record ScaleTruth(string DatasetSha256, int QueryCount, int QuerySeed, long ScannedRows,
     double ElapsedMs, ExactNeighbor[][][] Neighbors);
 

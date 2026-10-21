@@ -23,7 +23,10 @@ public partial class MainWindow
         await RenderArchiveAsync(query, true, "video");
         Require(_preview?.PersonEvidence.Count > 0 && _player is not null, "real-person-evidence-and-player-open");
         Require(_showingPreparedFrame && PreviewImage.Source is BitmapSource { PixelWidth: > 0 } && VideoPlayer.Visibility == Visibility.Hidden && VideoPlayer.WindowHandle != 0,
-            "sampled-context-frame-visible-before-play");
+            "sampled-evidence-poster-visible-before-play");
+        var source = _preview!.PersonEvidence.First();
+        Require(source.Thumbnail is not null || (source.Portrait is not null && PreviewImage.ToolTip is string tip && tip.Contains("face crop") && PersonEvidenceDetails.Text.Contains("Showing saved face crop")),
+            "poster-source-is-context-or-labeled-legacy-crop");
         Require(PersonEvidenceFaces.ItemsSource is IReadOnlyCollection<EvidenceFaceTile> faces && faces.Count == _preview!.PersonEvidence.Count && faces.All(f => f.Portrait is not null),
             "matched-face-crops-visible");
         long expected = _preview!.StartMs!.Value;
@@ -49,7 +52,8 @@ public partial class MainWindow
         {
             passed = true, query, file = _selectedResult!.RelativePath, expectedStartMs = expected, opened,
             checks = checks.Distinct().ToArray(),
-            scope = "Real workspace archive and isolated LibVLC player. The initial poster is the prepared model-input frame; decoded seek pictures may round at scene boundaries."
+            posterSource = source.Thumbnail is not null ? "sampled-context-frame" : "sampled-face-crop",
+            scope = "Real archive and isolated LibVLC player. Initial evidence uses a sampled context frame or a labeled legacy face crop; decoded seek pictures may round at scene boundaries."
         }, new JsonSerializerOptions(WireJson.Options) { WriteIndented = true }));
         await CleanupAfterCaptureAsync();
     }

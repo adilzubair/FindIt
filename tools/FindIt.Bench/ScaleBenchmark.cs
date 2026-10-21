@@ -24,9 +24,11 @@ public static class ScaleBenchmark
             string distribution = Option(args, "--distribution") ?? "isotropic-512";
             string mode = Option(args, "--index-mode") ?? "both";
             int candidateCount = int.Parse(Option(args, "--candidate-count") ?? "512");
+            int buildConcurrency = int.Parse(Option(args,"--build-concurrency")??Math.Min(8,Environment.ProcessorCount).ToString());
             if (count < 100 || count > 2_000_000 || queries < 4 || queries > 1024 || !ScaleAlgorithms.Distributions.Contains(distribution) || !new[] { "mapped", "loaded", "both" }.Contains(mode))
                 throw new ArgumentException("Use 100–2,000,000 records, 4–1024 queries, distribution isotropic-512/clustered-512, mode mapped/loaded/both.");
             if (candidateCount < 50 || candidateCount > 16384) throw new ArgumentException("Use 50–16384 --candidate-count; default 512 matches the reader's minimum semantic candidate request.");
+            if(buildConcurrency<1||buildConcurrency>8)throw new ArgumentException("Use 1–8 --build-concurrency; default is min(8,logical processors).");
             directory = ScaleArtifacts.DatasetDirectory(Option(args, "--root") ?? "artifacts/scale", count, seed, distribution);
             string marker = Path.Combine(directory, "dataset.json");
             if (!File.Exists(marker)) ScaleArtifacts.AtomicWrite(marker, new ScaleDataset(1, ScaleArtifacts.Owner, count, seed, distribution, ScaleAlgorithms.Dimensions));
@@ -35,7 +37,7 @@ public static class ScaleBenchmark
             ScaleArtifacts.RejectLinkedFile(Path.Combine(directory, ".benchmark.lock"));
             await using var lease = new FileStream(Path.Combine(directory, ".benchmark.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             state = EnsureDataset(directory, state, cancellation.Token);
-            var index = EnsureIndex(directory, state, cancellation.Token);
+            var index = ScaleNativeBuilder.Build(directory,state,cancellation.Token,buildConcurrency:buildConcurrency);
             int querySeed = seed;
             var truth = EnsureTruth(directory, state, queries, querySeed, cancellation.Token);
             var measurements = new List<JsonElement>();
@@ -49,11 +51,13 @@ public static class ScaleBenchmark
                 independentQueries = true, productionSettings = new { metric = "cosine", storedScalar = "fp16", connectivity = 16, expansionAdd = 128, expansionSearch = 128 },
                 reference = new { method = "Exhaustive cosine over every eligible canonical FP16 row; independent FP16-rounded queries; SIMD float products with double accumulation.", scannedRows = truth.ScannedRows, elapsedMs = truth.ElapsedMs },
                 index,
+                construction = new { requestedConcurrency=buildConcurrency, actualIndexConcurrency=index.BuildConcurrency, actualIndexBatchRows=index.BuildBatchRows,
+                    scope="Benchmark construction only. Production preparation still inserts serially. Parallel graph insertion order is nondeterministic, so recall must be measured for each built graph; older completed serial graphs remain reusable and retain concurrency=1." },
                 storage = new { canonicalBytes = new FileInfo(Path.Combine(directory, "vectors.f16")).Length, indexBytes = index.Bytes, truthBytes = new FileInfo(TruthPath(directory, queries)).Length },
                 recallGate = new { minimumMeanRecallAt50 = .95, passed, appliesTo = "Each unfiltered, 10% filter, and 1% filter scenario in each access mode." },
                 scope = "Synthetic USearch retrieval only. This does not certify text encoding, semantic usefulness, full reader/UI memory, physical drive performance, 8 GB hardware, or a clean offline Windows machine.",
                 osCache = "Uncontrolled. Separate fresh child processes exclude managed build/truth memory, but dataset hashing/building and previous runs can warm the Windows filesystem cache. These are process-cold measurements, not disk-cold certification.",
-                resumption = "Canonical vectors and exact-reference progress resume from flushed checkpoints. Completed native indexes are checksum-verified and reused; an interrupted native build restarts from canonical vectors.",
+                resumption = "Canonical vectors, native graphs (every 50,000 inserted rows), and exact-reference progress resume from flushed checkpoints. Native resumption verifies graph SHA-256, count, dimensions, dataset, DLL, and build settings; it loads a private writable copy and preserves current/previous snapshots. Completed native indexes remain checksum-verified and reusable.",
                 measurements
             };
             string output = Path.GetFullPath(Option(args, "--output") ?? Path.Combine(directory, $"report-q{queries}-{DateTime.UtcNow:yyyyMMddTHHmmssfff}.json"));
@@ -117,41 +121,6 @@ public static class ScaleBenchmark
         return state;
     }
 
-    private static ScaleIndex EnsureIndex(string directory, ScaleDataset dataset, CancellationToken token)
-    {
-        string path = Path.Combine(directory, "index.usearch");
-        string manifest = Path.Combine(directory, "index.json");
-        string native = new RuntimePaths(AppContext.BaseDirectory).Native("libusearch_c.dll") ?? throw new FileNotFoundException("Pinned USearch DLL is unavailable.");
-        string nativeHash = ScaleArtifacts.Hash(native);
-        if (File.Exists(manifest))
-        {
-            var state = ScaleArtifacts.Read<ScaleIndex>(manifest);
-            if (state.DatasetSha256 == dataset.Sha256 && state.NativeSha256 == nativeHash && File.Exists(path) && state.Bytes == new FileInfo(path).Length && ScaleArtifacts.Hash(path) == state.Sha256)
-            { Console.Error.WriteLine("Reusing checksum-verified native index."); return state; }
-            throw new InvalidDataException("Completed native index identity/checksum mismatch. Keep these artifacts for diagnosis and choose a fresh artifacts root.");
-        }
-        ScaleArtifacts.RejectLinkedFile(path);
-        string temporary = path + ".partial";
-        ScaleArtifacts.RejectLinkedFile(temporary);
-        var timer = Stopwatch.StartNew();
-        using (var index = new NativeVectorIndex(ScaleAlgorithms.Dimensions))
-        using (var file = new FileStream(Path.Combine(directory, "vectors.f16"), FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan))
-        {
-            var bytes = new byte[ScaleAlgorithms.BytesPerVector]; var vector = new float[ScaleAlgorithms.Dimensions];
-            for (int row = 0; row < dataset.Count; row++)
-            {
-                if ((row & 255) == 0) token.ThrowIfCancellationRequested();
-                file.ReadExactly(bytes); ScaleAlgorithms.Decode(bytes, vector); index.Add((ulong)row, vector);
-                if ((row + 1) % 10000 == 0) Console.Error.WriteLine($"Native index {row + 1:N0}/{dataset.Count:N0}; elapsed {timer.Elapsed.TotalSeconds:F1}s");
-            }
-            token.ThrowIfCancellationRequested(); index.Save(temporary);
-        }
-        token.ThrowIfCancellationRequested();
-        File.Move(temporary, path, true);
-        var result = new ScaleIndex(dataset.Sha256!, nativeHash, new FileInfo(path).Length, ScaleArtifacts.Hash(path), timer.Elapsed.TotalMilliseconds);
-        ScaleArtifacts.AtomicWrite(manifest, result);
-        return result;
-    }
 
     internal static string TruthPath(string directory, int queryCount) => Path.Combine(directory, $"truth-q{queryCount}.json");
     public static ScaleTruth EnsureTruth(string directory, ScaleDataset dataset, int queryCount, int querySeed, CancellationToken token)

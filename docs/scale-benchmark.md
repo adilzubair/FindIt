@@ -32,6 +32,7 @@ Options:
 | `--seed` | `42` | Deterministic generator seed |
 | `--query-count` | `64` | Held-out queries, 4–1024; use at least 64 for acceptance runs |
 | `--candidate-count` | `512` | Request this many ANN candidates, then evaluate the first 50; 512 matches the production reader's minimum request |
+| `--build-concurrency` | Minimum of 8 and logical processors | Native graph insertion workers, 1–8; recorded in graph checkpoints and final index metadata |
 | `--index-mode` | `both` | Fresh-process `mapped`, `loaded`, or both |
 | `--output` | Timestamped dataset report | Final JSON report, also printed to standard output |
 
@@ -55,6 +56,12 @@ The source build locates the bundled `runtime/native/libusearch_c.dll` through t
 
 The default graph configuration is the application's pinned cosine/FP16, connectivity 16, insertion expansion 128, and search expansion 128. USearch may increase effective expansion to satisfy a larger candidate request. The native DLL SHA-256 and candidate count are recorded. This runner does not tune parameters against the test queries.
 
+New benchmark graphs use bounded parallel insertion, with at most eight workers and 1,024 vectors per batch. The native index reserves the complete corpus capacity before parallel insertion. An exclusive managed gate prevents search, save, reserve, or disposal while workers are active; every native insertion receives a separate error pointer. All workers join before the completed canonical prefix advances. Inputs are checked for finite values and duplicate keys before mutation. A native batch failure poisons its in-memory handle, preventing search, save, or continuation; resumption reloads the last durable checkpoint instead of saving a partial batch.
+
+Cancellation is checked between successful complete batches. Batches stop at checkpoint boundaries, so the 50,000-row publication interval is preserved. Graph insertion order is nondeterministic under parallel construction, and recall is always measured against the exact reference for the resulting graph. **Production preparation still builds serially in this pass.** The report records both the requested concurrency and the actual saved index's concurrency/batch size; older completed serial indexes remain reusable with construction concurrency 1. Do not present parallel construction throughput as production preparation throughput or silently compare their recall as if graph construction were identical.
+
+Native count, exact key membership, and exact stored-vector lookup validate insertion integrity independently of graph traversal. They do not prove that every node is reachable by ANN search. During a 2,048-row isotropic diagnostic, serial construction returned all 2,048 nodes with a full-size request while two parallel constructions returned 2,031 and 2,041, although all keys and canonical vectors were present. This is a measured construction-quality difference that must remain visible; do not replace held-out Recall@50 with self-match or stored-key checks.
+
 The reported gate requires mean Recall@50 ≥95% separately for unfiltered, 10%, and 1% scenarios in each selected access mode. A native filtered-search failure is useful evidence even where the full reader would choose its exact-search path for a small allowed set. The standalone benchmark does not exercise that reader fallback.
 
 ## Timing and memory boundaries
@@ -75,7 +82,11 @@ The runner creates `scale-v1-<distribution>-<count>-<seed>` under the chosen art
 
 Canonical data is flushed every 8,192 rows before publishing its checkpoint and prefix hash. On resume, the committed prefix is checksum-verified; only an owned uncommitted tail can be truncated. Exact-reference queues checkpoint every 65,536 rows and on cooperative cancellation. Completed reference data is reused for the same dataset/query set.
 
-A native build interrupted before index publication restarts from the canonical vectors; native graph insertion is not checkpoint-resumable. A completed native index is reused only after validating its dataset identity, native DLL hash, byte length, and checksum. A mismatched completed artifact is retained for diagnosis and rejected; select a fresh artifacts root to rebuild. Writes use flushed temporary files and replacement. An unexpected power failure may lose the latest checkpoint, but does not require touching original media or a prepared archive.
+A native build saves a flushed, token-named graph checkpoint every **50,000 inserted rows**. Its atomically replaced pointer records the current and previous graph, row counts, checksums, dataset/DLL identities, dimensions, insertion/search settings, and cumulative build time. The previous graph is retained until its replacement pointer has been published. Cleanup is restricted to the benchmark's exact token filename convention inside its owned dataset directory.
+
+On resume, the builder verifies graph identity, byte length, SHA-256, native row count, dimensions, concurrency, and batch-size fingerprint, then seeks the canonical file to the next row. A corrupt current graph falls back to its separately verified previous graph. It loads a **private writable native copy**: the checkpoint file is mapped read-only while copying and is closed before insertion resumes. Ordinary mapped and loaded reader indexes remain immutable. A cooperative cancellation also attempts to checkpoint additional completed batches; a hard process termination can lose at most the work since the last successful periodic checkpoint. A termination during checkpoint publication can leave an unreferenced token graph; the next successful publication safely removes that owned debris. Resume with the same build concurrency; changing it requires a separate build rather than relabeling an existing graph.
+
+A completed native index is reused only after validating its dataset identity, native DLL hash, byte length, and checksum. Completed indexes from the earlier benchmark implementation remain compatible. A mismatched completed artifact is retained for diagnosis and rejected; select a fresh artifacts root to rebuild. The final complete graph is copied and flushed to the immutable index, and its manifest is published before build checkpoints are removed. Writes use flushed temporary files and atomic replacement. An unexpected power failure may lose the latest checkpoint, but does not require touching original media or a prepared archive.
 
 Press Ctrl+C for cooperative cancellation. Reports and artifacts stay local. Neither drive contents, source media, nor generated scale data should be committed to Git.
 

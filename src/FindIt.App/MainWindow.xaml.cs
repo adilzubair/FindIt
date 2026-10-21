@@ -102,7 +102,8 @@ public partial class MainWindow : Window
     {
         if (_preview?.Kind != FileKind.Video) return;
         // RenderTargetBitmap cannot capture a foreign HWND. Show the actual indexed frame in captures.
-        var frame = _preview.PersonEvidence.FirstOrDefault()?.Thumbnail ?? _preview.Moments.FirstOrDefault(m => m.StartMs == _preview.StartMs)?.Thumbnail ?? _selectedResult?.Thumbnail;
+        var evidence = _preview.PersonEvidence.FirstOrDefault();
+        var frame = evidence?.Thumbnail ?? evidence?.Portrait ?? _preview.Moments.FirstOrDefault(m => m.StartMs == _preview.StartMs)?.Thumbnail ?? _selectedResult?.Thumbnail;
         PreviewImage.Source = await _thumbnails.ReadAsync(frame, CancellationToken.None);
         VideoPlayer.Visibility = Visibility.Collapsed;
         FooterStatus.Text += " · Video surface shown as its indexed frame";
@@ -376,12 +377,19 @@ public partial class MainWindow : Window
         {
             token.ThrowIfCancellationRequested();
             var audioOnly = preview.Kind == FileKind.Audio;
-            var context = preview.PersonEvidence.FirstOrDefault()?.Thumbnail;
-            var poster = audioOnly ? null : await _thumbnails.ReadAsync(context, token);
+            var evidence = preview.PersonEvidence.FirstOrDefault();
+            var frame = evidence?.Thumbnail ?? evidence?.Portrait;
+            var poster = audioOnly ? null : await _thumbnails.ReadAsync(frame, token);
             token.ThrowIfCancellationRequested();
             _showingPreparedFrame = poster is not null;
             PreviewImage.Source = poster;
-            PreviewImage.ToolTip = _showingPreparedFrame ? "Sampled face frame. Play or seek to view surrounding footage." : null;
+            PreviewImage.ToolTip = _showingPreparedFrame
+                ? evidence?.Thumbnail is not null
+                    ? "Sampled face frame. Play or seek to view surrounding footage."
+                    : "Sampled face crop from this older library. Play or seek to view surrounding footage."
+                : null;
+            if (_showingPreparedFrame && evidence?.Thumbnail is null)
+                PersonEvidenceDetails.Text += " Showing saved face crop; context frame unavailable.";
             VideoPlayer.Width = VideoPlayer.Height = audioOnly ? 1 : double.NaN;
             VideoPlayer.HorizontalAlignment = audioOnly ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
             VideoPlayer.VerticalAlignment = audioOnly ? VerticalAlignment.Top : VerticalAlignment.Stretch;
