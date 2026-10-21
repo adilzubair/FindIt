@@ -22,11 +22,11 @@ public sealed class ResultTile : INotifyPropertyChanged
     private double _thumbnailHeight = 148;
     public double ThumbnailHeight { get => _thumbnailHeight; set { if (Math.Abs(value - _thumbnailHeight) < .5) return; _thumbnailHeight = value; Changed(); } }
     private BitmapSource? _thumbnail;
-    public BitmapSource? Thumbnail { get => _thumbnail; set { _thumbnail = value; Changed(); } }
+    public BitmapSource? Thumbnail { get => _thumbnail; set { _thumbnail = value; Changed(); Changed(nameof(HasTextPreview)); Changed(nameof(GlyphVisibility)); } }
     public string KindLabel => Result.Kind switch { FileKind.Image => "Photo", FileKind.Video => "Video", FileKind.Document => "Document", FileKind.Audio => "Audio", _ => "File" };
     public string KindGlyph => Result.Kind switch { FileKind.Image => "\uEB9F", FileKind.Video => "\uE714", FileKind.Audio => "\uE8D6", _ => "\uE8A5" };
-    public bool HasTextPreview => Result.Kind == FileKind.Document && !string.IsNullOrWhiteSpace(Result.Snippet);
-    public Visibility GlyphVisibility => HasTextPreview ? Visibility.Collapsed : Visibility.Visible;
+    public bool HasTextPreview => Thumbnail is null && Result.Kind == FileKind.Document && !string.IsNullOrWhiteSpace(Result.Snippet);
+    public Visibility GlyphVisibility => Thumbnail is not null || HasTextPreview ? Visibility.Collapsed : Visibility.Visible;
     public string DateLabel => Result.ModifiedUtc.ToLocalTime().ToString("dd MMM yyyy");
     public string AccessibleName => $"{Result.Name}, {KindLabel}, {Result.RelativePath}. Open preview.";
     public string Subtitle => Result.MatchCategory == MatchCategory.PossiblePersonAction ? "Possible person/action match" : Result.Moments.FirstOrDefault()?.StartMs is long time ? $"{TimeSpan.FromMilliseconds(time):hh\\:mm\\:ss} · {Result.Moments.Count} matching {(Result.Moments.Count == 1 ? "moment" : "moments")}" : $"{KindLabel} · {DateLabel}";

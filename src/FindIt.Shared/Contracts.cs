@@ -160,7 +160,7 @@ public sealed record PersonObservation
 }
 
 public sealed record PreviewRequest(Guid FileId, long? SegmentId = null);
-public sealed record PlaybackRequest(string Path, long WindowHandle, long StartMs = 0);
+public sealed record PlaybackRequest(string Path, long WindowHandle, long StartMs = 0, bool AutoPlay = true);
 public sealed record PlaybackState(bool Playing, long PositionMs, long DurationMs);
 public sealed record WorkerDiagnostics(int ProcessId, long PrivateBytes, long WorkingSetBytes, long PeakWorkingSetBytes, double CpuMilliseconds);
 public sealed record PreviewResult

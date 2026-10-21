@@ -173,7 +173,12 @@ public partial class MainWindow
         PreviewBackButton.Visibility = detailOnly ? Visibility.Visible : Visibility.Collapsed;
         SearchHeadingRow.Visibility = detailOnly ? Visibility.Collapsed : Visibility.Visible;
         PaginationBar.Visibility = detailOnly || _status.FileCount == 0 ? Visibility.Collapsed : Visibility.Visible;
-        PreviewMediaRow.Height = new GridLength(_preview?.Kind == FileKind.Document && PreviewImage.Source is null ? 0 : Math.Min(ActualHeight < 650 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 192)));
+        var timedMedia = _preview?.Kind is FileKind.Video or FileKind.Audio;
+        var mediaHeight = timedMedia
+            ? Math.Min(ActualHeight < 650 ? 72 : ActualHeight < 820 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 330))
+            : Math.Min(ActualHeight < 650 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 192));
+        PreviewMediaRow.Height = new GridLength(_preview?.Kind == FileKind.Document && PreviewImage.Source is null ? 0 : mediaHeight);
+        MomentsHeading.Margin = timedMedia && ActualHeight < 820 ? new Thickness(0, 8, 0, 8) : new Thickness(0, 16, 0, 12);
         PersonInspector.Visibility = _personInspectorOpen ? Visibility.Visible : Visibility.Collapsed;
         PersonInspectorColumn.Width = !_personInspectorOpen ? new GridLength(0) : compact ? new GridLength(1, GridUnitType.Star) : new GridLength(340);
         PeopleGalleryColumn.Width = _personInspectorOpen && compact ? new GridLength(0) : new GridLength(1, GridUnitType.Star);

@@ -27,9 +27,9 @@ public partial class App : Application
                 Shutdown();
                 return;
             }
-            if (Argument("--playback-smoke") is { } mediaPath)
+            if ((Argument("--playback-smoke") ?? Argument("--paused-playback-smoke")) is { } mediaPath)
             {
-                await window.RunPlaybackSmokeAsync(mediaPath, Argument("--playback-report") ?? Path.Combine(root, "playback-smoke.json"));
+                await window.RunPlaybackSmokeAsync(mediaPath, Argument("--playback-report") ?? Path.Combine(root, "playback-smoke.json"), e.Args.Contains("--paused-playback-smoke"), long.TryParse(Argument("--playback-start-ms"), out var startMs) ? startMs : 0);
                 Shutdown();
                 return;
             }
@@ -68,7 +68,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             if (Argument("--interaction-smoke") is not null) { Shutdown(1); return; }
-            if (Argument("--playback-smoke") is not null)
+            if (Argument("--playback-smoke") is not null || Argument("--paused-playback-smoke") is not null)
             {
                 var output = Argument("--playback-report") ?? Path.Combine(root, "playback-smoke.json");
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);

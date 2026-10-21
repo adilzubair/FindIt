@@ -214,7 +214,9 @@ public sealed partial class ArchiveService
         {
             if (!overlay) { clauses.Add("0=1"); continue; }
             string parameter = "$person" + i; values.Add((parameter, people[i].ToString("D")));
-            clauses.Add($"s.id IN (SELECT ms.id FROM usermeta.assignments a JOIN observations o ON o.id=a.observation_id JOIN segments os ON os.id=o.segment_id JOIN segments ms ON ms.file_id=os.file_id WHERE a.person_id={parameter} AND a.rejected=0 AND (a.confirmed=1 OR a.score>=0.55) AND (os.id=ms.id OR (ms.start_ms IS NOT NULL AND os.start_ms IS NOT NULL AND os.start_ms<=COALESCE(ms.end_ms,ms.start_ms)+1500 AND COALESCE(os.end_ms,os.start_ms)>=ms.start_ms-1500)))");
+            // Evidence must overlap the matching moment. Without shot-bounded face tracks,
+            // proximity is insufficient: adjacent shots may contain different people.
+            clauses.Add($"s.id IN (SELECT ms.id FROM usermeta.assignments a JOIN observations o ON o.id=a.observation_id JOIN segments os ON os.id=o.segment_id JOIN segments ms ON ms.file_id=os.file_id WHERE a.person_id={parameter} AND a.rejected=0 AND (a.confirmed=1 OR a.score>=0.55) AND (os.id=ms.id OR (ms.start_ms IS NOT NULL AND os.start_ms IS NOT NULL AND os.start_ms<COALESCE(ms.end_ms,ms.start_ms+1) AND COALESCE(os.end_ms,os.start_ms+1)>ms.start_ms)))");
         }
         return (clauses.Count == 0 ? "1=1" : string.Join(" AND ", clauses), values);
     }

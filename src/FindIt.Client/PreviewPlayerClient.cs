@@ -11,6 +11,8 @@ public sealed class PreviewPlayerClient : IAsyncDisposable
     public PreviewPlayerClient(string rootPath, nint windowHandle) => (_root, _window) = (Path.GetFullPath(rootPath), windowHandle);
     private WorkerConnection Worker => _worker ??= WorkerConnection.Start(_root, "preview");
     public Task<PlaybackState> PlayAsync(string absolutePath, long startMs = 0, CancellationToken cancellationToken = default) => Worker.CallAsync<PlaybackState>("playback.play", new PlaybackRequest(absolutePath, _window.ToInt64(), startMs), null, cancellationToken);
+    /// <summary>Loads the selected moment paused; decoding never starts audible playback.</summary>
+    public Task<PlaybackState> OpenAsync(string absolutePath, long startMs = 0, CancellationToken cancellationToken = default) => Worker.CallAsync<PlaybackState>("playback.play", new PlaybackRequest(absolutePath, _window.ToInt64(), startMs, AutoPlay: false), null, cancellationToken);
     public Task<PlaybackState> PauseAsync(CancellationToken cancellationToken = default) => Worker.CallAsync<PlaybackState>("playback.pause", null, null, cancellationToken);
     public Task<PlaybackState> StopAsync(CancellationToken cancellationToken = default) => Worker.CallAsync<PlaybackState>("playback.stop", null, null, cancellationToken);
     public Task<PlaybackState> SeekAsync(long milliseconds, CancellationToken cancellationToken = default) => Worker.CallAsync<PlaybackState>("playback.seek", new { milliseconds }, null, cancellationToken);

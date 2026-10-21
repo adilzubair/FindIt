@@ -103,8 +103,14 @@ internal sealed class ArchiveStorage
                     var path = PortablePaths.Resolve(Root, artifact.Path, true);
                     var info = new FileInfo(path);
                     bool smallRequired = path.EndsWith("catalog.sqlite", StringComparison.OrdinalIgnoreCase) || path.EndsWith("vector-index.bin", StringComparison.OrdinalIgnoreCase);
-                    if (info.Length != artifact.Length || artifact.LastWriteUtcTicks != 0 && info.LastWriteTimeUtc.Ticks != artifact.LastWriteUtcTicks || smallRequired && !string.Equals(await HashFileAsync(path, cancellationToken), artifact.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("An archive artifact failed validation.");
-                    verification[path] = (artifact.Length, File.GetLastWriteTimeUtc(path));
+                    if (info.Length != artifact.Length) throw new InvalidDataException("An archive artifact failed validation.");
+                    // FAT stores local timestamps, and copies can normalize modification times.
+                    // A timestamp change invalidates the fast path, not the immutable bytes: hash
+                    // the artifact before accepting it and cache this host's observed timestamp.
+                    var observedWriteTime = info.LastWriteTimeUtc;
+                    bool timestampChanged = artifact.LastWriteUtcTicks != 0 && observedWriteTime.Ticks != artifact.LastWriteUtcTicks;
+                    if ((smallRequired || timestampChanged) && !string.Equals(await HashFileAsync(path, cancellationToken), artifact.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("An archive artifact failed validation.");
+                    verification[path] = (artifact.Length, observedWriteTime);
                 }
                 // The catalog and vector records must always be covered, even for an empty semantic index.
                 if (!verification.ContainsKey(CatalogPath(manifest)) || !verification.ContainsKey(VectorPath(manifest)) || manifest.VectorPacks.Any(p => !verification.ContainsKey(PortablePaths.Resolve(Root, p, true)))) throw new InvalidDataException("Generation is missing required artifacts.");

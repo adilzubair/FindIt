@@ -136,11 +136,14 @@ public sealed partial class ArchiveService
                 command.CommandText = "SELECT r.person_id,r.embedding,p.confirmed FROM person_references r JOIN people p ON p.id=r.person_id WHERE r.fingerprint=$fingerprint;"; command.Parameters.AddWithValue("$fingerprint", FaceFingerprint);
                 using var reader = command.ExecuteReader(); while (reader.Read()) references.Add((reader.GetString(0), VectorEncoding.Decode((byte[])reader[1]), reader.GetBoolean(2)));
             }
+            // A discovered cluster is an organizational hypothesis, not a competing named
+            // identity. Keep its prototypes out of the named-reference ambiguity gate.
+            var namedReferences = references.Where(r => r.Confirmed).ToArray();
             NativeVectorIndex? faceIndex = null;
-            if (NativeVectorIndex.Available && references.Count > 0)
+            if (NativeVectorIndex.Available && references.Any(r => !r.Confirmed))
             {
                 faceIndex = new NativeVectorIndex(references[0].Vector.Length);
-                for (int i = 0; i < references.Count; i++) faceIndex.Add((ulong)i + 1, references[i].Vector);
+                for (int i = 0; i < references.Count; i++) if (!references[i].Confirmed) faceIndex.Add((ulong)i + 1, references[i].Vector);
             }
             using var faces = catalog.CreateCommand(); faces.CommandText = "SELECT id,embedding,quality,portrait FROM observations;";
             using var observations = faces.ExecuteReader();
@@ -160,21 +163,34 @@ public sealed partial class ArchiveService
                         command.CommandText = "SELECT person_id FROM rejections WHERE observation_id=$id;"; command.Parameters.AddWithValue("$id", observation);
                         using var rejectedReader = command.ExecuteReader(); while (rejectedReader.Read()) rejected.Add(rejectedReader.GetString(0));
                     }
-                    var pool = faceIndex is null ? references : faceIndex.Search(vector, 12).Select(n => references[(int)n.Key - 1]).ToList();
-                    var candidates = pool.Where(r => !rejected.Contains(r.Person)).GroupBy(r => r.Person).Select(g => (Person: g.Key, Score: g.Max(r => VectorEncoding.Cosine(vector, r.Vector)), Confirmed: g.Any(r => r.Confirmed))).OrderByDescending(r => r.Score).Take(2).ToArray();
+                    // Score all named identities exactly. A bounded ANN list of reference
+                    // photos can otherwise hide the runner-up identity behind many photos of
+                    // the same person, accidentally treating an ambiguous match as certain.
+                    var namedCandidates = namedReferences.Where(r => !rejected.Contains(r.Person)).GroupBy(r => r.Person)
+                        .Select(g => (Person: g.Key, Score: g.Max(r => VectorEncoding.Cosine(vector, r.Vector))))
+                        .OrderByDescending(r => r.Score).Take(2).ToArray();
                     string person; double score;
-                    if (candidates.Length > 0 && candidates[0].Score >= (candidates[0].Confirmed ? 0.55 : 0.65) && (candidates.Length == 1 || candidates[0].Score - candidates[1].Score >= 0.05))
-                    { person = candidates[0].Person; score = candidates[0].Score; }
-                    else if (observations.GetDouble(2) >= 0.6)
+                    if (namedCandidates.Length > 0 && namedCandidates[0].Score >= 0.55 && (namedCandidates.Length == 1 || namedCandidates[0].Score - namedCandidates[1].Score >= 0.05))
+                    { person = namedCandidates[0].Person; score = namedCandidates[0].Score; }
+                    else
                     {
-                        person = Guid.NewGuid().ToString("D"); score = 1;
-                        long number = Convert.ToInt64(ArchiveDatabase.Scalar(overlay, "SELECT COUNT(*) FROM people;"), CultureInfo.InvariantCulture) + 1;
-                        ArchiveDatabase.Execute(overlay, "INSERT INTO people(id,name,aliases,portrait,confirmed) VALUES($id,$name,'[]',$portrait,0); INSERT INTO person_references(person_id,embedding,fingerprint) VALUES($id,$embedding,$fingerprint);", ("$id", person), ("$name", $"Unnamed person {number}"), ("$portrait", observations.IsDBNull(3) ? null : observations.GetString(3)), ("$embedding", (byte[])observations[1]), ("$fingerprint", FaceFingerprint));
-                        references.Add((person, vector, false));
-                        if (faceIndex is null && NativeVectorIndex.Available) faceIndex = new NativeVectorIndex(vector.Length);
-                        faceIndex?.Add((ulong)references.Count, vector);
+                        var pool = faceIndex is null ? references.Where(r => !r.Confirmed) : faceIndex.Search(vector, 12).Select(n => references[(int)n.Key - 1]);
+                        var candidates = pool.Where(r => !rejected.Contains(r.Person)).GroupBy(r => r.Person)
+                            .Select(g => (Person: g.Key, Score: g.Max(r => VectorEncoding.Cosine(vector, r.Vector))))
+                            .OrderByDescending(r => r.Score).Take(2).ToArray();
+                        if (candidates.Length > 0 && candidates[0].Score >= 0.65 && (candidates.Length == 1 || candidates[0].Score - candidates[1].Score >= 0.05))
+                        { person = candidates[0].Person; score = candidates[0].Score; }
+                        else if (observations.GetDouble(2) >= 0.6)
+                        {
+                            person = Guid.NewGuid().ToString("D"); score = 1;
+                            long number = Convert.ToInt64(ArchiveDatabase.Scalar(overlay, "SELECT COUNT(*) FROM people;"), CultureInfo.InvariantCulture) + 1;
+                            ArchiveDatabase.Execute(overlay, "INSERT INTO people(id,name,aliases,portrait,confirmed) VALUES($id,$name,'[]',$portrait,0); INSERT INTO person_references(person_id,embedding,fingerprint) VALUES($id,$embedding,$fingerprint);", ("$id", person), ("$name", $"Unnamed person {number}"), ("$portrait", observations.IsDBNull(3) ? null : observations.GetString(3)), ("$embedding", (byte[])observations[1]), ("$fingerprint", FaceFingerprint));
+                            references.Add((person, vector, false));
+                            if (faceIndex is null && NativeVectorIndex.Available) faceIndex = new NativeVectorIndex(vector.Length);
+                            faceIndex?.Add((ulong)references.Count, vector);
+                        }
+                        else { ArchiveDatabase.Execute(overlay, "DELETE FROM assignments WHERE observation_id=$id AND confirmed=0 AND rejected=0;", ("$id", observation)); continue; }
                     }
-                    else { ArchiveDatabase.Execute(overlay, "DELETE FROM assignments WHERE observation_id=$id AND confirmed=0 AND rejected=0;", ("$id", observation)); continue; }
                     ArchiveDatabase.Execute(overlay, "INSERT INTO assignments(observation_id,person_id,confirmed,rejected,score) VALUES($id,$person,0,0,$score) ON CONFLICT(observation_id) DO UPDATE SET person_id=excluded.person_id,confirmed=0,rejected=0,score=excluded.score;", ("$id", observation), ("$person", person), ("$score", score));
                 }
                 ArchiveDatabase.Execute(overlay, "UPDATE settings SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='revision'; COMMIT;");

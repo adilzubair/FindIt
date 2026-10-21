@@ -60,7 +60,7 @@ internal static class Program
                     "people.list" => await backend.GetPeopleAsync(token).ConfigureAwait(false),
                     "people.observations" => await backend.GetPersonObservationsAsync(parameters.GetProperty("personId").GetGuid(), token).ConfigureAwait(false),
                     "people.save" => await SavePersonAsync(parameters, token).ConfigureAwait(false),
-                    "playback.play" when playback is not null => playback.Play(Deserialize<PlaybackRequest>(parameters)),
+                    "playback.play" when playback is not null => playback.Play(Deserialize<PlaybackRequest>(parameters), token),
                     "playback.pause" when playback is not null => playback.Pause(),
                     "playback.stop" when playback is not null => playback.Stop(),
                     "playback.seek" when playback is not null => playback.Seek(parameters.GetProperty("milliseconds").GetInt64()),

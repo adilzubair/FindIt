@@ -973,7 +973,7 @@
                     <StackPanel
                       x:Name="VideoControls"
                       Visibility="Collapsed"
-                      Margin="0,12,0,0">
+                      Margin="0">
                       <WrapPanel>
                         <Button
                           Content="Play / pause"
@@ -1009,11 +1009,6 @@
                         TextWrapping="Wrap"
                         FontSize="12" />
                     </Border>
-                    <TextBlock
-                      x:Name="PreviewText"
-                      TextWrapping="Wrap"
-                      FontSize="12"
-                      LineHeight="20" />
                     <TextBlock
                       x:Name="MomentsHeading"
                       Text="Matching moments"
@@ -1065,6 +1060,11 @@
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock
+                      x:Name="PreviewText"
+                      TextWrapping="Wrap"
+                      FontSize="12"
+                      LineHeight="20" />
                     <Border
                       BorderBrush="{DynamicResource BorderBrush}"
                       BorderThickness="0,1,0,0"

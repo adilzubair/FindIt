@@ -21,6 +21,8 @@ public static class DriveEjector
         using var volume = CreateFile(@"\\.\" + drive[..2], 0, 7, 0, 3, 0, 0);
         if (volume.IsInvalid || !DeviceIoControl(volume, 0x002D1080, 0, 0, out DeviceNumber target, 12, out _, 0))
             return new(false, "FindIt is closed. Windows could not identify this external drive; use Safely Remove Hardware.");
+        // Identification handles must be closed before PnP checks for users of the device.
+        volume.Dispose();
         var diskGuid = new Guid("53f56307-b6bf-11d0-94f2-00a0c91efb8b");
         var set = SetupDiGetClassDevs(ref diskGuid, 0, 0, 0x12);
         if (set == new nint(-1)) return new(false, "FindIt is closed. Use Safely Remove Hardware.");
@@ -44,6 +46,7 @@ public static class DriveEjector
                     if (disk.IsInvalid || !DeviceIoControl(disk, 0x002D1080, 0, 0, out DeviceNumber number, 12, out _, 0) || number.Number != target.Number) continue;
                     if (!GetHotplug(disk, 0x002D0C14, 0, 0, out Hotplug hotplug, 8, out _, 0) || !hotplug.DeviceHotplug)
                         return new(false, "FindIt is closed. This device does not advertise safe hot removal; use Windows to manage it.");
+                    disk.Dispose();
                     var veto = new StringBuilder(256);
                     var result = CM_Request_Device_Eject(info.DevInst, out _, veto, veto.Capacity, 0);
                     return result == 0

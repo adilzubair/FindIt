@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using FindIt.Shared;
@@ -18,10 +19,11 @@ internal sealed class PlaybackHost : IDisposable
 
     public PlaybackHost(string root) => _root = Path.GetFullPath(root);
 
-    public PlaybackState Play(PlaybackRequest request)
+    public PlaybackState Play(PlaybackRequest request, CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var path = Path.GetFullPath(request.Path);
             var relative = Path.GetRelativePath(_root, path);
             if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar))
@@ -36,10 +38,41 @@ internal sealed class PlaybackHost : IDisposable
             {
                 if (request.StartMs > 0)
                     Native.libvlc_media_add_option(media, ":start-time=" + (request.StartMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture));
+                // LibVLC applies this in input initialization, before normal playback/demux.
+                // Calling set_pause immediately after play races its asynchronous startup.
+                if (!request.AutoPlay) Native.libvlc_media_add_option(media, ":start-paused");
                 Native.libvlc_media_player_set_media(_player, media);
                 if (request.WindowHandle != 0) Native.libvlc_media_player_set_hwnd(_player, (nint)request.WindowHandle);
                 if (Native.libvlc_media_player_play(_player) != 0) throw new IOException("Playback failed. The file may be damaged or unsupported.");
-                _paused = false;
+                _paused = !request.AutoPlay;
+                if (_paused)
+                {
+                    var timer = Stopwatch.StartNew();
+                    try
+                    {
+                        void WaitUntil(Func<bool> ready)
+                        {
+                            while (!ready())
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                if (Native.libvlc_media_player_get_state(_player) is VlcState.Error or VlcState.Ended || timer.Elapsed > TimeSpan.FromSeconds(8))
+                                    throw new IOException("The media could not open paused. Try another file or restore the bundled video runtime.");
+                                Thread.Sleep(15);
+                            }
+                        }
+                        WaitUntil(() => Native.libvlc_media_player_get_state(_player) == VlcState.Paused);
+                        // The initial Paused event may precede application of start-time.
+                        // Seek the paused input explicitly and return only after its clock settles.
+                        if (request.StartMs > 0)
+                        {
+                            var duration = Native.libvlc_media_player_get_length(_player);
+                            var target = duration > 0 ? Math.Min(request.StartMs, duration - 1) : request.StartMs;
+                            Native.libvlc_media_player_set_time(_player, target);
+                            WaitUntil(() => Math.Abs(Native.libvlc_media_player_get_time(_player) - target) <= 100);
+                        }
+                    }
+                    catch { Native.libvlc_media_player_stop(_player); _paused = false; throw; }
+                }
                 return State();
             }
             finally { Native.libvlc_media_release(media); }
@@ -50,7 +83,7 @@ internal sealed class PlaybackHost : IDisposable
     {
         lock (_gate) { if (_player != 0) { _paused = !_paused; Native.libvlc_media_player_set_pause(_player, _paused ? 1 : 0); } return State(); }
     }
-    public PlaybackState Stop() { lock (_gate) { if (_player != 0) Native.libvlc_media_player_stop(_player); return State(); } }
+    public PlaybackState Stop() { lock (_gate) { if (_player != 0) Native.libvlc_media_player_stop(_player); _paused = false; return State(); } }
     public PlaybackState Seek(long time) { lock (_gate) { if (_player != 0) Native.libvlc_media_player_set_time(_player, Math.Max(0, time)); return State(); } }
     public PlaybackState Volume(int value) { lock (_gate) { if (_player != 0) Native.libvlc_audio_set_volume(_player, Math.Clamp(value, 0, 100)); return State(); } }
     public PlaybackState State() { lock (_gate) return _player == 0 ? new(false, 0, 0) : new(Native.libvlc_media_player_is_playing(_player) != 0, Math.Max(0, Native.libvlc_media_player_get_time(_player)), Math.Max(0, Native.libvlc_media_player_get_length(_player))); }
@@ -100,6 +133,8 @@ internal sealed class PlaybackHost : IDisposable
     [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool SetDllDirectory(string path);
 
+    private enum VlcState { NothingSpecial, Opening, Buffering, Playing, Paused, Stopped, Ended, Error }
+
     private static class Native
     {
         private const string Dll = "findit_vlc";
@@ -116,6 +151,7 @@ internal sealed class PlaybackHost : IDisposable
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern void libvlc_media_player_stop(nint player);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern void libvlc_media_player_set_pause(nint player, int pause);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern int libvlc_media_player_is_playing(nint player);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern VlcState libvlc_media_player_get_state(nint player);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern long libvlc_media_player_get_time(nint player);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern long libvlc_media_player_get_length(nint player);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] internal static extern void libvlc_media_player_set_time(nint player, long time);

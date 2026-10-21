@@ -12,7 +12,9 @@
 #define CAP 32768
 
 static int join(wchar_t *out, const wchar_t *a, const wchar_t *b) {
-    return SUCCEEDED(StringCchPrintfW(out, CAP, L"%s\\%s", a, b));
+    size_t length = wcslen(a);
+    const wchar_t *separator = length && (a[length - 1] == L'\\' || a[length - 1] == L'/') ? L"" : L"\\";
+    return SUCCEEDED(StringCchPrintfW(out, CAP, L"%s%s%s", a, separator, b));
 }
 
 static void failure(const wchar_t *message) {
@@ -113,8 +115,13 @@ static int quote(wchar_t *out, size_t *position, const wchar_t *argument) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int show) {
     (void)instance; (void)previous; (void)commandLine; (void)show;
     wchar_t root[CAP], versionPath[CAP], version[65], source[CAP], cache[CAP], manifest[CAP], hash[65], app[CAP], complete[CAP];
-    if (!GetModuleFileNameW(NULL, root, CAP)) return 1;
-    wchar_t *slash = wcsrchr(root, L'\\'); if (!slash) return 1; *slash = 0;
+    DWORD moduleLength = GetModuleFileNameW(NULL, root, CAP);
+    if (!moduleLength || moduleLength >= CAP) return 1;
+    wchar_t *slash = wcsrchr(root, L'\\'); if (!slash) return 1;
+    // Preserve a drive root's slash: D: depends on a caller's per-drive current
+    // directory, whereas D:\ always identifies the archive beside this launcher.
+    if (slash > root && slash[-1] == L':') slash[1] = 0;
+    else *slash = 0;
     if (!join(versionPath, root, L"FindIt\\app\\current.txt")) return 1;
     HANDLE versionFile = CreateFileW(versionPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (versionFile == INVALID_HANDLE_VALUE) { failure(L"Keep FindIt.exe beside its FindIt folder. Restore the complete portable package and try again."); return 1; }

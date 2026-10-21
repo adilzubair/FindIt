@@ -361,7 +361,7 @@ public partial class MainWindow : Window
             VideoPlayer.UpdateLayout();
             _player ??= new PreviewPlayerClient(_root, VideoPlayer.WindowHandle);
             PreviewTime.Text = FormatTime(preview.StartMs ?? 0);
-            await _player.PlayAsync(preview.OriginalPath, preview.StartMs ?? 0, token); StartPlaybackPolling();
+            await _player.OpenAsync(preview.OriginalPath, preview.StartMs ?? 0, token); StartPlaybackPolling();
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
