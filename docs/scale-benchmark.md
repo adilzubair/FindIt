@@ -74,6 +74,10 @@ The tool **does not evict the Windows filesystem cache**. Parent integrity check
 
 Working set, private bytes, process peak working set, and 25 ms sampled peaks are measured while the native mapping or loaded index is still open. Working set includes resident mapped pages. The child includes query arrays, truth sets, result metadata, and the largest allowed-key HashSet. It excludes the encoder, SQLite catalog, complete reader, interface, video playback, and other processes. Sampling can miss very brief peaks; the operating system process peak is reported as an additional check. Hardware metadata includes CPU, logical processors, physical RAM, OS, runtime, and SIMD width.
 
+Loaded indexes now stream through the pinned native file API only when the resolved full path is ASCII and shorter than 240 characters. The Unicode-safe metadata mapping is closed before loading, and a read-sharing lease prevents file replacement or writes between metadata and load. This avoids simultaneously resident mapped-source and private-destination copies for the normal controlled portable index paths. Unicode, long, and device-prefixed paths retain the Unicode-safe buffer loader and its potential two-copy transition. `EstimateLoadPeakBytes` accounts for one versus two serialized index copies; callers must add allocator, model, catalog, and interface headroom. A 1.5 GiB serialized-index limit alone is not an aggregate reader peak-memory guarantee.
+
+The reader's preload policy adds the larger of 128 MiB or **25% of serialized index bytes** as allocation headroom, applies its 1.5 GiB index-transition budget, and checks available physical memory before choosing a loaded index. A Unicode/long-path fallback whose two-copy transition exceeds that budget remains mapped. The native one-copy/two-copy estimate itself is unchanged; neither estimate is a full-application memory certification.
+
 ## Storage, interruption, and reuse
 
 At one million records the canonical FP16 file is 1.024 GB. The graph index adds further storage. Each distribution/size has its own canonical data and index; sizes do not share files. Native construction can require substantially more transient memory than a mapped read. Reserve several GB of free disk and run large cases sequentially. Consult actual report sizes rather than assuming graph overhead.
@@ -84,7 +88,7 @@ Canonical data is flushed every 8,192 rows before publishing its checkpoint and 
 
 A native build saves a flushed, token-named graph checkpoint every **50,000 inserted rows**. Its atomically replaced pointer records the current and previous graph, row counts, checksums, dataset/DLL identities, dimensions, insertion/search settings, and cumulative build time. The previous graph is retained until its replacement pointer has been published. Cleanup is restricted to the benchmark's exact token filename convention inside its owned dataset directory.
 
-On resume, the builder verifies graph identity, byte length, SHA-256, native row count, dimensions, concurrency, and batch-size fingerprint, then seeks the canonical file to the next row. A corrupt current graph falls back to its separately verified previous graph. It loads a **private writable native copy**: the checkpoint file is mapped read-only while copying and is closed before insertion resumes. Ordinary mapped and loaded reader indexes remain immutable. A cooperative cancellation also attempts to checkpoint additional completed batches; a hard process termination can lose at most the work since the last successful periodic checkpoint. A termination during checkpoint publication can leave an unreferenced token graph; the next successful publication safely removes that owned debris. Resume with the same build concurrency; changing it requires a separate build rather than relabeling an existing graph.
+On resume, the builder verifies graph identity, byte length, SHA-256, native row count, dimensions, concurrency, and batch-size fingerprint, then seeks the canonical file to the next row. A corrupt current graph falls back to its separately verified previous graph. It loads a **private writable native copy**, through streaming for eligible short ASCII paths or a read-only source mapping for the Unicode/long-path fallback. Source files are closed before insertion resumes. Ordinary mapped and loaded reader indexes remain immutable. A cooperative cancellation also attempts to checkpoint additional completed batches; a hard process termination can lose at most the work since the last successful periodic checkpoint. A termination during checkpoint publication can leave an unreferenced token graph; the next successful publication safely removes that owned debris. Resume with the same build concurrency; changing it requires a separate build rather than relabeling an existing graph.
 
 A completed native index is reused only after validating its dataset identity, native DLL hash, byte length, and checksum. Completed indexes from the earlier benchmark implementation remain compatible. A mismatched completed artifact is retained for diagnosis and rejected; select a fresh artifacts root to rebuild. The final complete graph is copied and flushed to the immutable index, and its manifest is published before build checkpoints are removed. Writes use flushed temporary files and atomic replacement. An unexpected power failure may lose the latest checkpoint, but does not require touching original media or a prepared archive.
 
@@ -114,3 +118,35 @@ dotnet test tests/FindIt.Tests/FindIt.Tests.csproj -c Release `
   --artifacts-path artifacts/scale-tests-build -m:1 --disable-build-servers `
   --filter FullyQualifiedName~ScaleBenchmarkTests
 ```
+
+## Recorded development run — 21 October 2026
+
+Host: Intel Core Ultra 9 275HX, 24 logical processors, 33,752,997,888 bytes physical RAM, Windows build 26200, .NET 10.0.11 x64. Runs used the local workspace drive. Other development work ran concurrently and filesystem caches were uncontrolled. These results are development evidence, **not certification of the reference 8 GB laptop, an external HDD, semantic relevance, or complete reader memory**.
+
+All rows use 512 dimensions, 64 independent queries, exact top-50 reference, and seed 42. Each recall value below is the mean across queries and was identical between mapped and loaded modes. Construction differs between the older serial graphs and the newer eight-worker graph; this is recorded rather than treated as a controlled construction comparison.
+
+| Dataset | Records | Construction | Requested candidates | Recall@50: all / 10% / 1% | Mean ≥95% in all scenarios |
+| --- | ---: | --- | ---: | --- | --- |
+| Clustered | 100,000 | Serial | 512 | 100.00% / 99.97% / 100.00% | Pass |
+| Clustered | 500,000 | Serial | 512 | 99.75% / 98.94% / 99.81% | Pass |
+| Clustered | 1,000,000 | Eight workers, resumed after hard kill | 512 | 98.38% / 96.81% / 99.03% | Pass |
+| Clustered, same million-record graph | 1,000,000 | Same saved graph | 1,024 | 99.03% / 98.53% / 99.31% | Pass |
+| Isotropic | 100,000 | Serial | 512 | 30.06% / 90.16% / 100.00% | **Fail** |
+| Isotropic, same graph | 100,000 | Same saved graph | 1,024 | 50.78% / 98.38% / 100.00% | **Fail** |
+
+The WPF interface currently requests 256 results, resulting in 1,024 semantic candidates. The worker/API minimum remains 512. The 1,024-candidate runs therefore diagnose the existing interface policy; they are not parameter tuning or an untouched certification set. The isotropic failure remains open evidence of a hard-distribution limitation. No global search-expansion increase was applied to conceal it.
+
+The million-record graph is 1,172,578,076 bytes and its canonical FP16 data is 1,024,000,000 bytes. Its checkpointed native construction took 478.85 seconds, excluding the earlier discarded serial attempt and some restart overhead. A deliberately terminated owned process had logged 320,480 inserted rows; the latest verified graph checkpoint held 300,000 with the previous 250,000 retained. Current/previous checksums and the entire canonical-file checksum matched before/after termination. Resumption loaded a private copy of the verified 300,000-row checkpoint and completed the run. This exercised real process death in addition to the small cooperative-cancellation and corrupt-current-checkpoint tests.
+
+The before/after load optimization reused the exact same million-record graph, canonical data, 64-query reference, and 1,024-candidate policy:
+
+| Loaded-index measurement | Mapped-source copy loader | Short-ASCII streaming loader |
+| --- | ---: | ---: |
+| Peak child working set | 2,483,486,720 bytes | 1,411,051,520 bytes |
+| Final child working set | 1,410,973,696 bytes | 1,411,051,520 bytes |
+| Index-open time | 1.033 seconds | 2.363 seconds |
+| Mean Recall@50: all / 10% / 1% | 99.03% / 98.53% / 99.31% | 99.03% / 98.53% / 99.31% |
+
+The measured peak reduction is about 43.2%, with a slower open in this run. Final memory and recall were unchanged. Streaming-loader warm P95 native retrieval was 8.57 / 75.58 / 421.27 ms for all / 10% / 1% respectively. Mapped timings varied substantially with cache/development activity and are retained in the raw reports; this is another reason to avoid treating this run as hardware latency certification. These memory values exclude model encoding, catalog, UI, preview, and other processes. Unicode/long-path fallback retains the two-copy loading behavior, which the reader's preload policy must budget or avoid.
+
+Raw local reports are retained under `artifacts/scale-validation/`: `clustered-100k.json`, `clustered-500k.json`, `clustered-1m-parallel.json`, `clustered-1m-ui1024.json`, `clustered-1m-ui1024-stream.json`, `isotropic-100k.json`, and `isotropic-100k-ui1024.json`. The `native-hardkill-before.json` / `native-hardkill-after.json` evidence and distinct interrupted/restart logs preserve the recovery exercise. They contain synthetic data and machine diagnostics, remain local, and are not committed with generated datasets.

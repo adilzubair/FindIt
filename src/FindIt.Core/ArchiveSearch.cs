@@ -17,6 +17,7 @@ public sealed partial class ArchiveService
     private HashSet<ulong>? liveVectorIds;
     private ExactVectorIndex? exactIndex;
     private long loadedVectorGeneration;
+    private bool nativeIndexInitialized;
     private string indexNotice = "";
 
     public async Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken = default)
@@ -92,29 +93,38 @@ public sealed partial class ArchiveService
                         if (predicates.Parameters.Count > 0 || predicates.Sql != "1=1")
                         {
                             allowed = [];
-                            using var filter = db.CreateCommand(); filter.CommandText = $"SELECT s.id FROM segments s JOIN files f ON f.id=s.file_id WHERE {predicates.Sql};"; AddParameters(filter, predicates.Parameters);
+                            // Filename/text-only segments are not semantic candidates and must
+                            // not inflate the cutoff for the small-set exact retrieval path.
+                            using var filter = db.CreateCommand(); filter.CommandText = $"SELECT s.id FROM segments s JOIN files f ON f.id=s.file_id WHERE {predicates.Sql} AND s.vector_path IS NOT NULL AND s.vector_offset>=0 AND s.vector_length=$vectorLength;"; AddParameters(filter, predicates.Parameters);
+                            filter.Parameters.AddWithValue("$vectorLength", Dimension * 2);
                             using var selected = filter.ExecuteReader(); while (selected.Read()) { cancellationToken.ThrowIfCancellationRequested(); allowed.Add((ulong)selected.GetInt64(0)); }
                         }
-                        EnsureVectorIndex(generation);
                         IReadOnlyList<(long Id, double Score)> neighbors;
                         if (allowed is { Count: <= 4096 })
                         {
+                            // A small filtered scan needs only canonical vectors. In particular,
+                            // do not preload the entire HDD graph before choosing this path.
+                            EnsureVectorGeneration(generation.GenerationId);
                             exactIndex ??= new ExactVectorIndex(RootPath, storage.VectorPath(generation), generation.VectorPacks, Dimension);
                             neighbors = exactIndex.Search(vector, candidates, id => allowed.Contains((ulong)id), cancellationToken);
                         }
-                        else if (nativeIndex is not null)
-                        {
-                            var accepted = allowed ?? liveVectorIds;
-                            neighbors = nativeIndex.Search(vector, candidates, accepted)
-                                .Concat(nativeDeltaIndex?.Search(vector, candidates, accepted) ?? [])
-                                .GroupBy(n => n.Key).Select(g => g.MinBy(n => n.Distance)!)
-                                .OrderBy(n => n.Distance).Take(candidates)
-                                .Select(n => ((long)n.Key, 1.0 - n.Distance)).ToArray();
-                        }
                         else
                         {
-                            neighbors = exactIndex!.Search(vector, candidates, allowed is null ? null : id => allowed.Contains((ulong)id), cancellationToken);
-                            notice = indexNotice.Length > 0 ? indexNotice : "Semantic search uses an exact scan because the optimized ANN runtime is unavailable; large libraries may be slower.";
+                            EnsureVectorIndex(generation);
+                            if (nativeIndex is not null)
+                            {
+                                var accepted = allowed ?? liveVectorIds;
+                                neighbors = nativeIndex.Search(vector, candidates, accepted)
+                                    .Concat(nativeDeltaIndex?.Search(vector, candidates, accepted) ?? [])
+                                    .GroupBy(n => n.Key).Select(g => g.MinBy(n => n.Distance)!)
+                                    .OrderBy(n => n.Distance).Take(candidates)
+                                    .Select(n => ((long)n.Key, 1.0 - n.Distance)).ToArray();
+                            }
+                            else
+                            {
+                                neighbors = exactIndex!.Search(vector, candidates, allowed is null ? null : id => allowed.Contains((ulong)id), cancellationToken);
+                                notice = indexNotice.Length > 0 ? indexNotice : "Semantic search uses an exact scan because the optimized ANN runtime is unavailable; large libraries may be slower.";
+                            }
                         }
                         int rank = 0;
                         foreach (var neighbor in neighbors)
@@ -170,16 +180,30 @@ public sealed partial class ArchiveService
         finally { searchGate.Release(); }
     }
 
+    private void EnsureVectorGeneration(long generationId)
+    {
+        if (loadedVectorGeneration == generationId) return;
+        nativeIndex?.Dispose(); nativeIndex = null; nativeDeltaIndex?.Dispose(); nativeDeltaIndex = null; exactIndex?.Dispose(); exactIndex = null; liveVectorIds = null; indexNotice = "";
+        nativeIndexInitialized = false;
+        loadedVectorGeneration = generationId;
+    }
+
     private void EnsureVectorIndex(GenerationManifest generation)
     {
-        if (loadedVectorGeneration == generation.GenerationId && (nativeIndex is not null || exactIndex is not null)) return;
-        nativeIndex?.Dispose(); nativeIndex = null; nativeDeltaIndex?.Dispose(); nativeDeltaIndex = null; exactIndex?.Dispose(); exactIndex = null; liveVectorIds = null; indexNotice = "";
+        EnsureVectorGeneration(generation.GenerationId);
+        // An earlier small filtered query may have opened the exact index only.
+        // A later broader query must still be allowed to initialize native retrieval.
+        if (nativeIndexInitialized) return;
         string path = generation.SemanticBasePath is { } basePath ? PortablePaths.Resolve(RootPath, basePath, true) : Path.Combine(storage.GenerationDirectory(generation.GenerationId), "semantic.usearch");
         if (NativeVectorIndex.Available && File.Exists(path))
         {
             // Query the drive's seek-penalty flag; low-memory systems retain a bounded mapped view.
             var deltaPath = generation.SemanticDeltaPath is { } delta ? PortablePaths.Resolve(RootPath, delta, true) : null;
-            bool load = StorageProfile.ShouldPreload(RootPath, new FileInfo(path).Length + (deltaPath is null ? 0 : new FileInfo(deltaPath).Length));
+            long baseBytes = new FileInfo(path).Length;
+            long deltaBytes = deltaPath is null ? 0 : new FileInfo(deltaPath).Length;
+            long estimatedPeak = checked(NativeVectorIndex.EstimateLoadPeakBytes(path, baseBytes)
+                + (deltaPath is null ? 0 : NativeVectorIndex.EstimateLoadPeakBytes(deltaPath, deltaBytes)));
+            bool load = StorageProfile.ShouldPreload(RootPath, checked(baseBytes + deltaBytes), estimatedPeak);
             try
             {
                 nativeIndex = NativeVectorIndex.Open(path, !load);
@@ -193,11 +217,11 @@ public sealed partial class ArchiveService
             {
                 nativeIndex?.Dispose(); nativeIndex = null; nativeDeltaIndex?.Dispose(); nativeDeltaIndex = null; liveVectorIds = null;
                 indexNotice = "The optimized index could not be opened. Semantic search is using the canonical exact index and may be slower.";
-                exactIndex = new ExactVectorIndex(RootPath, storage.VectorPath(generation), generation.VectorPacks, Dimension);
+                exactIndex ??= new ExactVectorIndex(RootPath, storage.VectorPath(generation), generation.VectorPacks, Dimension);
             }
         }
-        else exactIndex = new ExactVectorIndex(RootPath, storage.VectorPath(generation), generation.VectorPacks, Dimension);
-        loadedVectorGeneration = generation.GenerationId;
+        else exactIndex ??= new ExactVectorIndex(RootPath, storage.VectorPath(generation), generation.VectorPacks, Dimension);
+        nativeIndexInitialized = true;
     }
 
     private (string Sql, List<(string Name, object? Value)> Parameters) BuildPredicates(SearchFilters filters, IReadOnlyList<Guid> people, bool overlay)

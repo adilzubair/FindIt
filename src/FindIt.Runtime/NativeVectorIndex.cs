@@ -12,6 +12,7 @@ public sealed unsafe class NativeVectorIndex : IDisposable
     private readonly object gate = new();
     private MemoryMappedFile? mapping;
     private MemoryMappedViewAccessor? view;
+    private FileStream? sourceLease;
     private byte* pointer;
     private readonly int dimensions;
     private bool readOnly;
@@ -123,34 +124,74 @@ public sealed unsafe class NativeVectorIndex : IDisposable
     }
     public static NativeVectorIndex Open(string path,bool view=true) => OpenCore(path,view,readOnly:true);
 
-    /// <summary>Copies a saved index into privately owned native memory for continued insertion.
-    /// The source file is mapped read-only only while copying, then closed; it is never edited.</summary>
+    /// <summary>Privately loads a saved index for continued insertion. Eligible ASCII paths stream after their
+    /// metadata mapping closes; Unicode/long paths copy from a read-only mapping. The source is closed and never edited.</summary>
     public static NativeVectorIndex OpenForUpdate(string path) => OpenCore(path,view:false,readOnly:false);
+
+    /// <summary>Native file loading is restricted to resolved short ASCII paths. Other paths retain Unicode-safe buffers.</summary>
+    public static bool CanStreamLoad(string path)
+    {
+        string fullPath=Path.GetFullPath(path);
+        return Path.IsPathFullyQualified(fullPath)&&fullPath.Length<240&&fullPath.All(c=>c<=0x7f)&&
+            !fullPath.StartsWith(@"\\?\",StringComparison.Ordinal)&&!fullPath.StartsWith(@"\\.\",StringComparison.Ordinal);
+    }
+
+    /// <summary>Source/destination index bytes during loading, before allocator overhead, model buffers or other processes.
+    /// Storage policy must add headroom; this is not an aggregate memory promise.</summary>
+    public static long EstimateLoadPeakBytes(string path,long serializedBytes)
+    {
+        if(serializedBytes<0)throw new ArgumentOutOfRangeException(nameof(serializedBytes));
+        return CanStreamLoad(path)?serializedBytes:serializedBytes>long.MaxValue/2?long.MaxValue:serializedBytes*2;
+    }
 
     private static NativeVectorIndex OpenCore(string path,bool view,bool readOnly)
     {
         _=new RuntimePaths(AppContext.BaseDirectory);
-        var mm=MemoryMappedFile.CreateFromFile(path,FileMode.Open,null,0,MemoryMappedFileAccess.Read);
-        var accessor=mm.CreateViewAccessor(0,0,MemoryMappedFileAccess.Read);
-        byte* pointer=null;accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+        string fullPath=Path.GetFullPath(path);
+        FileStream? lease=null;
+        MemoryMappedFile? mm=null;
+        MemoryMappedViewAccessor? accessor=null;
+        byte* address=null;
+        bool acquired=false;
         NativeVectorIndex? result=null;
         try
         {
-            usearch_metadata_buffer((IntPtr)(pointer+accessor.PointerOffset),(nuint)accessor.Capacity,out var options,out var error);Check(error);
+            // The same sharing lease spans metadata and load, preventing replacement or writes between opens.
+            lease=new FileStream(fullPath,FileMode.Open,FileAccess.Read,FileShare.Read);
+            mm=MemoryMappedFile.CreateFromFile(lease,null,0,MemoryMappedFileAccess.Read,HandleInheritability.None,leaveOpen:true);
+            accessor=mm.CreateViewAccessor(0,0,MemoryMappedFileAccess.Read);
+            accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref address);acquired=true;
+            usearch_metadata_buffer((IntPtr)(address+accessor.PointerOffset),(nuint)accessor.Capacity,out var options,out var error);Check(error);
             result=new NativeVectorIndex(checked((int)options.Dimensions));
             if(view)
             {
-                usearch_view_buffer(result.handle,(IntPtr)(pointer+accessor.PointerOffset),(nuint)accessor.Capacity,out error);Check(error);
-                result.mapping=mm;result.view=accessor;result.pointer=pointer;result.readOnly=true;
+                usearch_view_buffer(result.handle,(IntPtr)(address+accessor.PointerOffset),(nuint)accessor.Capacity,out error);Check(error);
+                result.mapping=mm;result.view=accessor;result.pointer=address;result.sourceLease=lease;result.readOnly=true;
+                mm=null;accessor=null;lease=null;acquired=false;
             }
             else
             {
-                usearch_load_buffer(result.handle,(IntPtr)(pointer+accessor.PointerOffset),(nuint)accessor.Capacity,out error);Check(error);
-                accessor.SafeMemoryMappedViewHandle.ReleasePointer();accessor.Dispose();mm.Dispose();result.readOnly=readOnly;
+                if(CanStreamLoad(fullPath))
+                {
+                    // Close metadata mapping BEFORE streaming into owned native allocations.
+                    accessor.SafeMemoryMappedViewHandle.ReleasePointer();acquired=false;
+                    accessor.Dispose();accessor=null;mm.Dispose();mm=null;
+                    usearch_load(result.handle,fullPath,out error);Check(error);
+                }
+                else
+                {
+                    usearch_load_buffer(result.handle,(IntPtr)(address+accessor.PointerOffset),(nuint)accessor.Capacity,out error);Check(error);
+                }
+                result.readOnly=readOnly;
             }
             return result;
         }
-        catch { result?.Dispose();accessor.SafeMemoryMappedViewHandle.ReleasePointer();accessor.Dispose();mm.Dispose();throw; }
+        catch{result?.Dispose();throw;}
+        finally
+        {
+            if(acquired)accessor!.SafeMemoryMappedViewHandle.ReleasePointer();
+            accessor?.Dispose();mm?.Dispose();lease?.Dispose();
+        }
     }
     public IReadOnlyList<VectorNeighbor> Search(ReadOnlySpan<float> query,int limit,IReadOnlySet<ulong>? allowedIds=null)
     {
@@ -185,6 +226,7 @@ public sealed unsafe class NativeVectorIndex : IDisposable
             if(handle!=IntPtr.Zero){usearch_free(handle,out _);handle=IntPtr.Zero;}
             if(view is not null){view.SafeMemoryMappedViewHandle.ReleasePointer();pointer=null;view.Dispose();view=null;}
             mapping?.Dispose();mapping=null;
+            sourceLease?.Dispose();sourceLease=null;
         }
     }
     [StructLayout(LayoutKind.Sequential)] private struct InitOptions
@@ -205,6 +247,7 @@ public sealed unsafe class NativeVectorIndex : IDisposable
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_metadata_buffer(IntPtr data,nuint size,out InitOptions options,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_view_buffer(IntPtr h,IntPtr data,nuint size,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_load_buffer(IntPtr h,IntPtr data,nuint size,out IntPtr e);
+    [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_load(IntPtr h,[MarshalAs(UnmanagedType.LPUTF8Str)]string path,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern nuint usearch_search(IntPtr h,IntPtr vector,int kind,nuint count,[Out]ulong[] keys,[Out]float[] distances,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern nuint usearch_filtered_search(IntPtr h,IntPtr vector,int kind,nuint count,Filter filter,IntPtr state,[Out]ulong[] keys,[Out]float[] distances,out IntPtr e);
 }

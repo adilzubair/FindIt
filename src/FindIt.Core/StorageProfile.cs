@@ -5,12 +5,17 @@ namespace FindIt.Core;
 
 internal static class StorageProfile
 {
-    public static bool ShouldPreload(string archiveRoot, long serializedBytes)
+    public static bool ShouldPreload(string archiveRoot, long serializedBytes, long estimatedNativePeakBytes)
     {
-        if (serializedBytes > 1536L * 1024 * 1024) return false;
+        // Buffer loading briefly keeps both mapped source pages and the private copy.
+        // Count that transition and native bookkeeping before choosing the HDD path.
+        if (serializedBytes < 0 || estimatedNativePeakBytes < serializedBytes) return false;
+        long overhead = Math.Max(128L * 1024 * 1024, serializedBytes / 4);
+        if (estimatedNativePeakBytes > 1536L * 1024 * 1024 - overhead) return false;
+        long peakBytes = estimatedNativePeakBytes + overhead;
         string? mode = Environment.GetEnvironmentVariable("FINDIT_INDEX_MODE");
         if (string.Equals(mode, "view", StringComparison.OrdinalIgnoreCase)) return false;
-        if (string.Equals(mode, "load", StringComparison.OrdinalIgnoreCase)) return EnoughMemory(serializedBytes);
+        if (string.Equals(mode, "load", StringComparison.OrdinalIgnoreCase)) return EnoughMemory(peakBytes);
         if (!OperatingSystem.IsWindows()) return false;
         string? volume = Path.GetPathRoot(archiveRoot);
         if (volume is null || volume.Length < 2 || volume[1] != ':') return false;
@@ -20,7 +25,7 @@ internal static class StorageProfile
             if (handle.IsInvalid) return false;
             var query = new byte[12]; query[0] = 7; // StorageDeviceSeekPenaltyProperty; PropertyStandardQuery.
             var descriptor = new byte[16];
-            return DeviceIoControl(handle, 0x002D1400, query, query.Length, descriptor, descriptor.Length, out int returned, IntPtr.Zero) && returned >= 9 && descriptor[8] != 0 && EnoughMemory(serializedBytes);
+            return DeviceIoControl(handle, 0x002D1400, query, query.Length, descriptor, descriptor.Length, out int returned, IntPtr.Zero) && returned >= 9 && descriptor[8] != 0 && EnoughMemory(peakBytes);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
