@@ -2,6 +2,7 @@
 param(
     [string]$Version = '0.1.0-preview.1',
     [string]$OutputDirectory,
+    [string]$BuildArtifactsPath,
     [switch]$SkipBuild,
     [switch]$Zip,
     [string]$SigningThumbprint
@@ -20,7 +21,9 @@ try {
     $taskApp = Join-Path $taskOutput "FindIt/app/$Version"
     New-Item -ItemType Directory -Force $taskApp | Out-Null
     foreach ($taskProject in @('FindIt.App','FindIt.Worker')) {
-        & dotnet publish "src/$taskProject/$taskProject.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:RuntimeFrameworkVersion=10.0.13 -o $taskApp -m:1 --disable-build-servers
+        $taskPublishArguments = @('publish', "src/$taskProject/$taskProject.csproj", '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=false', '-p:PublishTrimmed=false', '-p:RuntimeFrameworkVersion=10.0.13', '-o', $taskApp, '-m:1', '--disable-build-servers')
+        if ($BuildArtifactsPath) { $taskPublishArguments += @('--artifacts-path', [IO.Path]::GetFullPath($BuildArtifactsPath)) }
+        & dotnet @taskPublishArguments
         if ($LASTEXITCODE) { throw "Publishing $taskProject failed." }
     }
     $taskRuntime = Join-Path $taskApp 'runtime'
