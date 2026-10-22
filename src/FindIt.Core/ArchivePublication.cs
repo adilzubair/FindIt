@@ -79,7 +79,7 @@ public sealed partial class ArchiveService
             var path = PortablePaths.Resolve(RootPath, relative, true);
             var info = new FileInfo(path);
             var prior = previous?.Artifacts.FirstOrDefault(a => a.Path == relative);
-            artifacts.Add(prior is not null && prior.Length == info.Length && prior.LastWriteUtcTicks == info.LastWriteTimeUtc.Ticks
+            artifacts.Add(prior is not null && prior.Length == info.Length && prior.WriteTimeMatches(info.LastWriteTimeUtc)
                 ? prior : new ArtifactDigest(relative, info.Length, await ArchiveStorage.HashFileAsync(path, cancellationToken), info.LastWriteTimeUtc.Ticks));
         }
         var manifest = new GenerationManifest { LibraryId = state.LibraryId, GenerationId = state.GenerationId, PreparedUtc = DateTimeOffset.UtcNow, EmbeddingFingerprint = embeddings.Fingerprint, FaceFingerprint = FaceFingerprint, VectorCount = vectorCount, VectorPacks = vectorPacks, Artifacts = artifacts, FileCount = kindCounts.Sum(k => k.Count), SegmentCount = totalSegments, TotalBytes = totalBytes, Kinds = kindCounts, Folders = folderCounts, Issues = issueList, SemanticBasePath = semantic.BasePath, SemanticDeltaPath = semantic.DeltaPath, BaseVectorCount = semantic.BaseCount, BaseVectorPacks = semantic.BasePacks };

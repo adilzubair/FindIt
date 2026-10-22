@@ -75,6 +75,48 @@ public sealed class TimestampPortabilityTests
         File.SetLastWriteTimeUtc(pack, originalTimestamp); await AssertPreviousGenerationAsync(history.Previous);
     }
 
+    [TestMethod]
+    public async Task PackWriteTimeWithinFatGranularityIsAcceptedWithoutHashing()
+    {
+        var history = await PrepareHistoryAsync(); string pack = await NewCurrentPackAsync(history.Previous, history.Current);
+        File.SetLastWriteTimeUtc(pack, (await RecordedWriteTimesAsync(history.Current))[pack].AddSeconds(1.5));
+        // FAT32 stores the published write time on a two-second boundary. An exclusive
+        // handle makes any hash fail, so acceptance proves the fast path was used.
+        await using var reader = Service();
+        using (var locked = new FileStream(pack, FileMode.Open, FileAccess.Read, FileShare.None))
+            Assert.AreEqual(history.Current, (await reader.GetStatusAsync()).GenerationId);
+    }
+
+    [TestMethod]
+    public async Task SameSizeChangedPackJustOutsideFatGranularityFallsBackToPreviousCompleteGeneration()
+    {
+        var history = await PrepareHistoryAsync(); string pack = await NewCurrentPackAsync(history.Previous, history.Current);
+        DateTime recorded = (await RecordedWriteTimesAsync(history.Current))[pack];
+        byte[] contents = await File.ReadAllBytesAsync(pack); contents[0] ^= 1; await File.WriteAllBytesAsync(pack, contents);
+        File.SetLastWriteTimeUtc(pack, recorded.AddSeconds(2)); await AssertPreviousGenerationAsync(history.Previous);
+    }
+
+    [TestMethod]
+    public async Task PublicationReusesTheDigestOfAPackWithinFatGranularity()
+    {
+        await File.WriteAllTextAsync(Path.Combine(root, "Documents", "stable.txt"), "stablemarker5512 receipt for a reading lamp.");
+        var history = await PrepareHistoryAsync();
+        var previous = await RecordedWriteTimesAsync(history.Previous); var current = await RecordedWriteTimesAsync(history.Current);
+        string pack = current.Keys.First(path => path.EndsWith(".pack", StringComparison.OrdinalIgnoreCase) && previous.ContainsKey(path));
+        File.SetLastWriteTimeUtc(pack, current[pack].AddSeconds(1.5));
+        await File.WriteAllTextAsync(Original, "thirdmarker2290 invoice for a kettle.");
+        await using (var service = Service()) Assert.IsTrue((await service.PrepareAsync(new() { Folders = ["Documents"] })).GenerationId > history.Current);
+        long next = Directory.EnumerateDirectories(Path.Combine(root, "FindIt", "archive", "generations")).Select(p => long.Parse(Path.GetFileName(p))).Max();
+        // A re-hash would record the observed time; reuse keeps the original digest's time.
+        Assert.AreEqual(current[pack], (await RecordedWriteTimesAsync(next))[pack]);
+    }
+
+    private async Task<Dictionary<string, DateTime>> RecordedWriteTimesAsync(long generation)
+    {
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Generation(generation), "manifest.json")));
+        return manifest.RootElement.GetProperty("artifacts").EnumerateArray().ToDictionary(
+            a => Absolute(a.GetProperty("path").GetString()!), a => new DateTime(a.GetProperty("lastWriteUtcTicks").GetInt64(), DateTimeKind.Utc), StringComparer.OrdinalIgnoreCase);
+    }
     private async Task<(long Previous, long Current)> PrepareHistoryAsync()
     {
         await File.WriteAllTextAsync(Original, "oldmarker4821 invoice for a bicycle in a forest.");
