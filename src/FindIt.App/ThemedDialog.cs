@@ -41,6 +41,16 @@ internal static class ThemedDialog
         return discard;
     }
 
+    public static bool Confirm(Window owner, string message, string caption, string action)
+    {
+        var confirmed = false;
+        var dialog = Create(owner, message, caption, MessageBoxImage.None,
+            [new("_Cancel", MessageBoxResult.Cancel, Cancel: true), new(action, MessageBoxResult.OK, Primary: true)],
+            value => confirmed = value == MessageBoxResult.OK);
+        dialog.ShowDialog();
+        return confirmed;
+    }
+
     private sealed record DialogAction(string Label, MessageBoxResult Result, bool Primary = false, bool Cancel = false);
 
     private static Window Create(Window? owner, string message, string caption, MessageBoxImage icon, IReadOnlyList<DialogAction> actions, Action<MessageBoxResult> completed)
@@ -56,7 +66,9 @@ internal static class ThemedDialog
         };
         if (owner?.IsVisible == true) dialog.Owner = owner;
         ApplyWindowAppearance(dialog);
-        var layout = new Grid { Margin = new Thickness(24) };
+        // Windows 11 content dialog: message on the surface, actions on a tinted footer.
+        var layout = new Grid();
+        layout.SetResourceReference(Panel.BackgroundProperty, "SurfaceBrush");
         layout.RowDefinitions.Add(new());
         layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
         var body = new StackPanel();
@@ -77,10 +89,12 @@ internal static class ThemedDialog
         heading.Children.Add(title); body.Children.Add(heading);
         var text = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 21 };
         AutomationProperties.SetName(text, message); body.Children.Add(text);
-        var content = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = Math.Max(80, dialog.MaxHeight - 130), Focusable = true };
+        var content = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = Math.Max(80, dialog.MaxHeight - 130), Focusable = true, Padding = new Thickness(24, 24, 24, 20) };
         AutomationProperties.SetName(content, "Message"); layout.Children.Add(content);
-        var footer = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 20, 0, 0) };
-        Grid.SetRow(footer, 1); layout.Children.Add(footer);
+        var footer = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        var footerBand = new Border { Child = footer, Padding = new Thickness(24, 16, 24, 20), BorderThickness = new Thickness(0, 1, 0, 0) };
+        footerBand.SetResourceReference(Border.BackgroundProperty, "CanvasBrush"); footerBand.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
+        Grid.SetRow(footerBand, 1); layout.Children.Add(footerBand);
         Button? defaultButton = null;
         foreach (var action in actions)
         {

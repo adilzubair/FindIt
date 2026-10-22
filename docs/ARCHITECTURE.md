@@ -51,6 +51,6 @@ Video extraction compares small decoded active-picture thumbnails to detect scen
 
 ## Interface and bounds
 
-WPF uses semantic light/dark resources and embedded IBM Plex Sans. The contact sheet virtualizes fixed-height rows; metadata is paged independently of visual virtualization. Selection follows stable file IDs. Decoded thumbnails have a 64 MiB cache, and only the selected media plays. HWND video stays rectangular with controls outside its native surface. Drive removal clears search readiness, cancels work, and leaves a reconnectable UI.
+WPF uses semantic light/dark resources, the system Segoe UI Variable typeface (Segoe UI on Windows 10) and Segoe Fluent Icons or MDL2 Assets glyphs. The contact sheet virtualizes fixed-height rows; metadata is paged independently of visual virtualization. Selection follows stable file IDs. Decoded thumbnails have a 64 MiB cache, and only the selected media plays. HWND video stays rectangular with controls outside its native surface. Drive removal clears search readiness, cancels work, and leaves a reconnectable UI.
 
 The implementation is intentionally explicit about remaining validation. The design's RAM/latency/relevance/identity figures are acceptance targets, not properties inferred from architecture. See release validation for the outstanding evidence.

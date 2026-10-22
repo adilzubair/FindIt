@@ -17,7 +17,6 @@ FindIt uses the following third-party software and model artifacts. Preserve the
 | LibVLC | [VideoLAN.LibVLC.Windows](https://code.videolan.org/videolan/libvlc-nuget) 3.0.24; LGPL-2.1-or-later package; modular codecs/plugins carry their own accompanying terms |
 | PDFium | Chromium PDFium build 8111 from [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries); BSD-style and accompanying third-party notices |
 | Tesseract / Leptonica / tessdata | [tesseract-ocr](https://github.com/tesseract-ocr), [charlesw/tesseract](https://github.com/charlesw/tesseract), [DanBloomberg/leptonica](https://github.com/DanBloomberg/leptonica); Apache-2.0 / BSD-style |
-| IBM Plex Sans | [IBM/plex](https://github.com/IBM/plex); SIL Open Font License 1.1, embedded font source/license in the application source |
 | LLVM-MinGW runtimes | [mstorsjo/llvm-mingw](https://github.com/mstorsjo/llvm-mingw); accompanying runtime notices |
 | Microsoft C++ desktop runtime | Official Microsoft.VCLibs.x64.14.00.Desktop artifact; Microsoft redistribution terms; extracted app-locally, no installation |
 

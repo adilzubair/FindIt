@@ -41,7 +41,7 @@ public partial class MainWindow : Window
     private bool _boundedSearch;
     private SearchFilters _submittedFilters = new();
     private bool _initialized, _searching, _statusPolling, _dark, _closing, _closed, _ejectRequested;
-    private bool _preparationUiBusy;
+    private bool _preparationUiBusy, _preparationPaused;
     private IReadOnlyList<FolderEntry> _displayFolders = [];
     private bool _noticePersistent;
     private bool _showingPreparedFrame;
@@ -51,6 +51,11 @@ public partial class MainWindow : Window
     private readonly Dictionary<ResultTile, CancellationTokenSource> _thumbnailRequests = [];
     public ObservableCollection<ResultRow> Rows { get; } = [];
     public ObservableCollection<ResultTile> CurrentTiles { get; } = [];
+    public ObservableCollection<ResultTile> RecentTiles { get; } = [];
+    private string _view = "home";
+    private readonly List<string> _recentQueries = [];
+    private string _previewPlainText = "";
+    private const double GalleryGap = 12, GalleryCaption = 44;
 
     public MainWindow(IArchiveBackend? backend, string? rootPath = null)
     {
@@ -63,9 +68,17 @@ public partial class MainWindow : Window
         InitializeAppearance();
         DataContext = this;
         PreparationFolders.ItemsSource = _preparationFolders;
+        _preparationFolders.CollectionChanged += (_, _) =>
+        {
+            PreparationFoldersEmpty.Visibility = _preparationFolders.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            RemovePreparationFolderButton.Visibility = _preparationFolders.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        };
+        RemovePreparationFolderButton.Visibility = Visibility.Collapsed;
         AutomationProperties.SetLiveSetting(NoticeText, AutomationLiveSetting.Polite);
         AutomationProperties.SetLiveSetting(ResultCount, AutomationLiveSetting.Polite);
         DriveLocation.Text = _root;
+        ShortcutList.ItemsSource = new ShortcutEntry[] { new("Search", "Ctrl K"), new("Search for what you typed", "Enter"), new("Move between files", "Arrow keys"), new("Open the selected file", "Ctrl Enter"), new("Close the preview or a person", "Esc") };
+        BuildStageStrip(); BuildSuggestions();
         _statusTimer.Tick += async (_, _) => await RefreshStatusAsync();
         Loaded += async (_, _) => await InitializeAsync();
     }
@@ -76,15 +89,16 @@ public partial class MainWindow : Window
         KindFilter.SelectedIndex = DateFilter.SelectedIndex = 0;
         FolderFilter.ItemsSource = new[] { new FolderChoice("All folders", null) }; FolderFilter.SelectedIndex = 0;
         PersonFilter.ItemsSource = new[] { new PersonChip(Guid.Empty, "Anyone") }; PersonFilter.SelectedIndex = 0;
-        Navigate("search");
+        Navigate("home");
         if (_backend is null) { FooterStatus.Text = "Opening archive…"; EmptyTitle.Text = "Opening your archive"; EmptyDescription.Text = "Reading the library on this drive. Your files will appear here shortly."; EmptyAction.IsEnabled = false; StartPreparationButton.IsEnabled = false; return; }
         StartPreparationButton.IsEnabled = true;
         await RefreshStatusAsync();
         await LoadPeopleAsync();
         _initialized = true;
         _statusTimer.Start();
+        // The newest-first browse window feeds both Browse and the home page's recent files.
         if (_status.FileCount > 0) await SearchAsync(true);
-        QueryBox.Focus();
+        (HomePage.IsVisible ? HeroQueryBox : QueryBox).Focus();
     }
 
     public async Task AttachBackendAsync(IArchiveBackend backend)
@@ -116,25 +130,85 @@ public partial class MainWindow : Window
         VideoPlayer.Visibility = Visibility.Collapsed;
         FooterStatus.Text += " · Video surface shown as its indexed frame";
     }
+    // Views: home (search landing), search (results or browse share one gallery), people, drive, settings.
+    // "browse", "folders" and "prepare" remain accepted names for capture tooling.
     private void Navigate(string page)
     {
-        WorkspaceTitle.Text = page switch { "people" => "People", "folders" => "Folders", "prepare" => "Prepare drive", _ => "Library" };
-        SearchPage.Visibility = page == "search" ? Visibility.Visible : Visibility.Collapsed;
-        PeoplePage.Visibility = page == "people" ? Visibility.Visible : Visibility.Collapsed;
-        FoldersPage.Visibility = page == "folders" ? Visibility.Visible : Visibility.Collapsed;
-        PreparePage.Visibility = page == "prepare" ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var (button, name) in new[] { (SearchNav, "search"), (PeopleNav, "people"), (FoldersNav, "folders"), (PrepareNav, "prepare") })
-        {
-            button.SetResourceReference(BackgroundProperty, page == name ? "TintBrush" : "SidebarBrush");
-            button.SetResourceReference(ForegroundProperty, page == name ? "AccentBrush" : "InkBrush");
-            button.FontWeight = page == name ? FontWeights.SemiBold : FontWeights.Normal;
-        }
-        FiltersPopup.IsOpen = false; if (page != "search") ClosePreview(); ApplyResponsiveLayout();
+        _view = page switch { "browse" or "folders" => "search", "prepare" => "drive", "home" or "search" or "people" or "drive" or "settings" => page, _ => "home" };
+        HomePage.Visibility = _view == "home" ? Visibility.Visible : Visibility.Collapsed;
+        SearchPage.Visibility = _view == "search" ? Visibility.Visible : Visibility.Collapsed;
+        PeoplePage.Visibility = _view == "people" ? Visibility.Visible : Visibility.Collapsed;
+        DrivePage.Visibility = _view == "drive" ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPage.Visibility = _view == "settings" ? Visibility.Visible : Visibility.Collapsed;
+        TitleSearchHost.Visibility = _view == "home" ? Visibility.Hidden : Visibility.Visible;
+        FiltersPopup.IsOpen = false; if (_view != "search") ClosePreview();
+        UpdateSearchMode(); ApplyResponsiveLayout();
     }
-    private void SearchNavClick(object sender, RoutedEventArgs e) { Navigate("search"); QueryBox.Focus(); }
+    private const string PersonEvidenceNotice = "A sampled face falls within this scene or passage. Check the face and surrounding footage: action, role and speaker are not verified.";
+    private bool _hasPersonEvidence;
+    private bool IsBrowsing => _submittedQuery.Length == 0;
+    private bool HasNoFilters => _filters is { KindIndex: 0, DateIndex: 0, Folder: null, ExactOnly: false } && (_filters.PersonId is null || _filters.PersonId == Guid.Empty);
+    // Results and Browse share the gallery: an empty query is newest-first browsing with a folder pane.
+    private void UpdateSearchMode()
+    {
+        if (!_uiReady) return;
+        var person = _filters.PersonId is Guid id && id != Guid.Empty ? (PersonFilter.SelectedItem as PersonChip)?.Name : null;
+        SearchTitle.Text = !IsBrowsing ? $"Results for “{_submittedQuery}”" : person ?? (_filters.Folder is { } folder ? folder.Replace('\\', '/').Replace("/", " › ") : "All files");
+        SearchSubtitle.Text = _hasPersonEvidence ? "People in these results are possible matches from sampled frames. Check each moment before relying on it."
+            : !IsBrowsing ? (_boundedSearch ? "The closest matches, best first" : "Best matches first") : person is not null ? $"Files where {person} may appear, newest first" : "Newest first";
+        SearchNav.IsChecked = _view == "home" || (_view == "search" && !IsBrowsing);
+        BrowseNav.IsChecked = _view == "search" && IsBrowsing;
+        PeopleNav.IsChecked = _view == "people";
+        DriveNav.IsChecked = _view == "drive";
+        SettingsNav.IsChecked = _view == "settings";
+        FolderPane.Visibility = _view == "search" && IsBrowsing && ActualWidth >= 1100 ? Visibility.Visible : Visibility.Collapsed;
+        FolderList.SelectedItem = _displayFolders.FirstOrDefault(f => f.RelativePath == _filters.Folder);
+    }
+    private void SearchNavClick(object sender, RoutedEventArgs e) { Navigate("home"); HeroQueryBox.Focus(); }
+    private async void BrowseNavClick(object sender, RoutedEventArgs e) => await BrowseAsync();
+    private async Task BrowseAsync(int? kind = null)
+    {
+        Navigate("browse");
+        var needsSearch = !IsBrowsing || (CurrentTiles.Count == 0 && _status.FileCount > 0) || (kind is int k && k != KindFilter.SelectedIndex);
+        if (kind is int index) { var initialized = _initialized; _initialized = false; KindFilter.SelectedIndex = index; _initialized = initialized; }
+        if (!needsSearch) return;
+        QueryBox.Clear(); await SearchAsync(true, submitQuery: true);
+    }
     private async void PeopleNavClick(object sender, RoutedEventArgs e) { Navigate("people"); await LoadPeopleAsync(); }
-    private void FoldersNavClick(object sender, RoutedEventArgs e) => Navigate("folders");
-    private void PrepareNavClick(object sender, RoutedEventArgs e) => Navigate("prepare");
+    private void DriveNavClick(object sender, RoutedEventArgs e) => Navigate("drive");
+    private void SettingsNavClick(object sender, RoutedEventArgs e) { Navigate("settings"); SynchronizeAppearanceMenu(); }
+    private async void KindShortcutClick(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is string tag && int.TryParse(tag, out var kind)) await BrowseAsync(kind); }
+    private async void RecentClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not ResultTile recent) return;
+        if (!IsBrowsing || !HasNoFilters) { ResetFilterControls(); QueryBox.Clear(); Navigate("browse"); await SearchAsync(true, submitQuery: true); }
+        else Navigate("browse");
+        await SelectResultAsync(recent.Result);
+    }
+    private async void HomePersonClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is PersonTile tile) await FindPersonAsync(tile.Person.Id);
+    }
+    private async Task FindPersonAsync(Guid personId)
+    {
+        Navigate("search"); var initialized = _initialized; _initialized = false;
+        PersonFilter.SelectedItem = PersonFilter.Items.OfType<PersonChip>().FirstOrDefault(p => p.PersonId == personId);
+        _initialized = initialized; await SearchAsync(true);
+    }
+    // Starter searches: names the user already gave, recent searches this session, then neutral examples.
+    private void BuildSuggestions()
+    {
+        SuggestionPanel.Children.Clear();
+        SuggestionPanel.Children.Add(new TextBlock { Text = "Try", Style = (Style)FindResource("CaptionText"), VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 12, 8) });
+        void Chip(string label, RoutedEventHandler click) { var chip = new Button { Content = label, Style = (Style)FindResource("SuggestionChip") }; chip.Click += click; SuggestionPanel.Children.Add(chip); }
+        foreach (var query in _recentQueries.Take(3)) Chip(query, async (_, _) => { QueryBox.Text = query; Navigate("search"); await SearchAsync(true, submitQuery: true); });
+        foreach (var person in _people.Where(p => p.Confirmed).Take(3)) Chip(person.Name, async (_, _) => await FindPersonAsync(person.Id));
+        foreach (var example in new[] { "sunset at the beach", "birthday cake", "receipt or invoice", "someone talking about travel" })
+        {
+            if (SuggestionPanel.Children.Count > 5) break;
+            Chip(example, async (_, _) => { QueryBox.Text = example; Navigate("search"); await SearchAsync(true, submitQuery: true); });
+        }
+    }
 
     private async Task RefreshStatusAsync()
     {
@@ -157,21 +231,19 @@ public partial class MainWindow : Window
             }
             if (wasConnected != _status.Connected || wasSemantic != _status.SemanticAvailable) { _dismissedStatusNotice = null; if (_status.Connected) HideNotice(true); }
             UpdatePreparationControls();
-            DriveName.Text = _status.DisplayName;
-            ConnectionLabel.Text = !_status.Connected ? "Drive disconnected" : _status.IsPreparing ? "Preparing" : _status.FileCount > 0 ? "Ready to search" : "Not prepared yet";
-            ConnectionDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, _status.Connected ? "ReadyBrush" : "MutedBrush");
-            FooterStatus.Text = !_status.Connected ? "Reconnect this drive to continue." : $"{_status.FileCount:N0} files · {_status.SegmentCount:N0} searchable moments · {FormatBytes(_status.TotalBytes)}";
+            UpdateDriveSummary();
             if (!_displayFolders.SequenceEqual(_status.Folders))
             {
-                var selectedPath = (FolderList.SelectedItem as FolderEntry)?.RelativePath;
                 _displayFolders = _status.Folders;
-                SidebarFolderList.ItemsSource = _displayFolders; FolderList.ItemsSource = _displayFolders;
-                FolderList.SelectedItem = _displayFolders.FirstOrDefault(folder => folder.RelativePath == selectedPath);
+                FolderList.ItemsSource = _displayFolders; DriveFolderList.ItemsSource = _displayFolders;
+                FolderList.SelectedItem = _displayFolders.FirstOrDefault(folder => folder.RelativePath == _filters.Folder);
             }
-            FolderEmpty.Visibility = _status.Folders.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            FolderEmpty.Visibility = _status.Folders.Count == 0 && FolderPane.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+            PreparedFoldersCard.Visibility = _status.Folders.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            AllFoldersCount.Text = $"{_status.FileCount:N0}";
             CapabilitiesList.ItemsSource = _status.Capabilities;
             IssuesList.ItemsSource = _status.Issues;
-            IssuesHeading.Text = _status.Issues.Count == 0 ? "No files need attention" : $"{_status.Issues.Count:N0} files needing attention";
+            IssuesHeading.Text = _status.Issues.Count == 0 ? "No files need attention" : $"{_status.Issues.Count:N0} file{(_status.Issues.Count == 1 ? " needs" : "s need")} attention";
             var selectedFolder = (FolderFilter.SelectedItem as FolderChoice)?.Path ?? _filters.Folder;
             _initialized = false;
             var choices = new[] { new FolderChoice("All folders", null) }.Concat(_status.Folders.Select(f => new FolderChoice(f.RelativePath, f.RelativePath))).ToArray();
@@ -184,7 +256,7 @@ public partial class MainWindow : Window
                 Notice("Drive disconnected. Reconnect the same drive to continue. Your query is preserved.");
             }
             else if (_status.IsPreparing) Notice("Preparation is running. Search currently prepared files while the rest are processed.", false);
-            else if (_status.FileCount > 0 && !_status.SemanticAvailable) Notice("Visual search is unavailable. You can still search filenames and exact words. See Prepare drive for details.", false);
+            else if (_status.FileCount > 0 && !_status.SemanticAvailable) Notice("Search by meaning is unavailable on this PC. You can still search file names and exact words. See Drive for details.", false);
             else if (!_searching) HideNotice();
             if (CurrentTiles.Count == 0) UpdateEmptyState();
             ApplyResponsiveLayout();
@@ -194,12 +266,44 @@ public partial class MainWindow : Window
             if (!Directory.Exists(_root))
             {
                 _status = _status with { Connected = false };
-                ConnectionLabel.Text = "Drive disconnected"; ConnectionDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "MutedBrush");
-                FooterStatus.Text = "Reconnect this drive to continue."; StopPlayback(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel();
+                UpdateDriveSummary(); StopPlayback(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel();
             }
             Notice($"Archive unavailable: {ex.Message}");
         }
         finally { _statusPolling = false; }
+    }
+
+    // One status, shown in the title bar pill, the Drive page header, Home and the rail badge.
+    private void UpdateDriveSummary()
+    {
+        var name = _status.DisplayName;
+        var prepared = _status.FileCount > 0;
+        var preparing = _status.IsPreparing || _preparationUiBusy;
+        DriveName.Text = DriveTitle.Text = name;
+        ConnectionLabel.Text = _backend is null ? "Opening" : !_status.Connected ? "Disconnected" : preparing ? "Preparing" : prepared ? "Ready" : "Not prepared";
+        var dot = !_status.Connected || _backend is null ? "MutedBrush" : preparing ? "AccentBrush" : prepared ? "ReadyBrush" : "WarningBrush";
+        ConnectionDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, dot);
+        DriveStatusDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, dot);
+        PreparingBadge.Visibility = preparing ? Visibility.Visible : Visibility.Collapsed;
+        var preparedOn = _status.PreparedUtc is DateTimeOffset at ? $" · prepared {at.ToLocalTime():d MMM yyyy}" : "";
+        DriveStatusText.Text = !_status.Connected ? "Disconnected. Reconnect this drive to continue." : preparing ? "Preparing. Search keeps working with prepared files." : prepared ? $"Ready to search · {_status.FileCount:N0} files{preparedOn}" : "Not prepared yet";
+        FooterStatus.Text = !_status.Connected ? "Reconnect this drive to continue." : $"{_status.FileCount:N0} files · {_status.SegmentCount:N0} searchable moments · {FormatBytes(_status.TotalBytes)}";
+        HomeSubtitle.Text = $"Describe a moment, name a person, or type words you remember. Everything stays on {name}.";
+        QueryPlaceholder.Text = $"Search {name}";
+        HomeSetupCard.Visibility = !prepared || !_status.Connected ? Visibility.Visible : Visibility.Collapsed;
+        HomeSetupTitle.Text = !_status.Connected ? "This drive is disconnected" : "Make this drive searchable";
+        HomeSetupText.Text = !_status.Connected ? "Reconnect the same drive to pick up where you left off. Your search is kept." : "FindIt reads your folders once and saves a private search index on the drive. Your files are not moved or changed.";
+        HomeSetupButton.Visibility = _status.Connected ? Visibility.Visible : Visibility.Collapsed;
+        HomeLibrarySections.Visibility = prepared && _status.Connected ? Visibility.Visible : Visibility.Collapsed;
+        WelcomeCard.Visibility = !prepared && _status.Connected && !preparing && _backend is not null ? Visibility.Visible : Visibility.Collapsed;
+        string Count(FileKind kind, string unit, string fallback) => _status.Kinds.FirstOrDefault(k => k.Kind == kind) is { } count ? $"{count.Count:N0} {unit}{(count.Count == 1 ? "" : "s")}" : fallback;
+        PhotoCount.Text = Count(FileKind.Image, "photo", "Browse by date");
+        VideoCount.Text = Count(FileKind.Video, "video", "With matching moments");
+        DocumentCount.Text = Count(FileKind.Document, "document", "PDF, Word, Excel, text");
+        AudioCount.Text = Count(FileKind.Audio, "recording", "Speech is searchable");
+        StartPreparationButton.Content = _preparationPaused ? "Resume" : prepared ? "Update index" : "Prepare drive";
+        PrepareFoldersTitle.Text = prepared ? "Prepare more folders" : "Folders to prepare";
+        PrepareHint.Text = prepared ? "Unchanged files are skipped, so updates are quick." : "Takes a while for large drives. You can pause and resume.";
     }
 
     private SearchFilters ReadFilters() => _filters.ToSearchFilters(DateTimeOffset.Now, TimeZoneInfo.Local);
@@ -219,6 +323,8 @@ public partial class MainWindow : Window
             _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null; ClosePreview();
             if (submitQuery) _submittedQuery = QueryBox.Text.Trim();
             _submittedFilters = ReadFilters();
+            if (submitQuery && _submittedQuery.Length > 0) { _recentQueries.Remove(_submittedQuery); _recentQueries.Insert(0, _submittedQuery); if (_recentQueries.Count > 6) _recentQueries.RemoveAt(6); BuildSuggestions(); }
+            UpdateSearchMode();
         }
         var requestedPage = targetPage ?? _page;
         _searchError = null;
@@ -254,15 +360,26 @@ public partial class MainWindow : Window
             CurrentTiles.Clear();
             foreach (var result in response.Results) CurrentTiles.Add(new ResultTile { Result = result });
             ArrangeRows(true); GalleryScrollToTop();
+            if (_page == 0 && IsBrowsing && HasNoFilters)
+            {
+                RecentTiles.Clear();
+                foreach (var result in response.Results.Take(12)) RecentTiles.Add(new ResultTile { Result = result, TileWidth = 148, ThumbnailHeight = 111 });
+            }
             EmptyState.Visibility = CurrentTiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             var first = _page * 256 + 1; var last = _page * 256 + CurrentTiles.Count;
             ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")}{(response.NextCursor is not null && response.TotalCount is null ? " · More results available" : "")}";
-            if (response.IsBoundedWindow) ResultCount.Text += " · Ranked selection";
+            if (response.IsBoundedWindow) ResultCount.Text += " · Closest matches";
+            UpdateSearchMode();
             SearchMoreButton.Visibility = response.CanSearchDeeper ? Visibility.Visible : Visibility.Collapsed;
             SearchMoreButton.IsEnabled = response.CanSearchDeeper;
             SearchMoreButton.Tag = response.RetrievalBudget;
             PreviousPageButton.IsEnabled = _page > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
-            if (!string.IsNullOrWhiteSpace(response.Notice)) Notice(response.Notice); else if (!_status.IsPreparing) HideNotice(true);
+            // Person evidence is qualified beside the results and in the preview, so the
+            // worker's matching caveat is not repeated in the page-wide notice.
+            _hasPersonEvidence = response.Results.Any(r => r.MatchCategory == MatchCategory.PossiblePersonAction || r.Moments.Any(m => m.PersonEvidence.Count > 0));
+            var notice = response.Notice?.Replace(PersonEvidenceNotice, "", StringComparison.Ordinal).Trim();
+            if (!string.IsNullOrWhiteSpace(notice)) Notice(notice); else if (!_status.IsPreparing) HideNotice(true);
+            UpdateSearchMode();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -297,16 +414,13 @@ public partial class MainWindow : Window
     private async void TileLoaded(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not ResultTile tile || tile.Thumbnail is not null || _thumbnailRequests.ContainsKey(tile)) return;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_searchCancellation?.Token ?? CancellationToken.None);
+        // Recent files on Home outlive searches, so only gallery tiles follow search cancellation.
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(RecentTiles.Contains(tile) ? CancellationToken.None : _searchCancellation?.Token ?? CancellationToken.None);
         _thumbnailRequests[tile] = cancellation;
         try
         {
             var thumbnail = await _thumbnails.ReadAsync(tile.Result.Thumbnail, cancellation.Token);
-            if (!cancellation.IsCancellationRequested)
-            {
-                var previousRatio = tile.AspectRatio; tile.Thumbnail = thumbnail;
-                if (Math.Abs(previousRatio - tile.AspectRatio) > .01) QueueThumbnailReflow();
-            }
+            if (!cancellation.IsCancellationRequested) tile.Thumbnail = thumbnail;
         }
         catch (OperationCanceledException) { }
         finally { if (_thumbnailRequests.TryGetValue(tile, out var active) && ReferenceEquals(active, cancellation)) _thumbnailRequests.Remove(tile); cancellation.Dispose(); }
@@ -343,12 +457,36 @@ public partial class MainWindow : Window
     private void UpdateEmptyState()
     {
         var prepared = _status.FileCount > 0;
-        EmptyTitle.Text = !_status.Connected ? "Your drive is disconnected" : _searching ? "Searching your archive" : _searchError is not null ? "Run your search again" : prepared ? _boundedSearch ? "No matches in this selection" : "No matches yet" : "Your archive, ready to discover";
-        EmptyDescription.Text = !_status.Connected ? "Reconnect this drive to pick up where you left off." : _searching ? "Finding files that match your search." : _searchError is not null ? "Try again. Your search and filters are still here." : prepared ? "Try a broader description, remove a filter, or search for words you remember." : "Choose folders to make your photos, videos and documents searchable offline.";
+        var noMatches = _status.Connected && !_searching && _searchError is null && prepared;
+        EmptyTitle.Text = !_status.Connected ? "Your drive is disconnected" : _searching ? "Searching your archive" : _searchError is not null ? "Run your search again" : prepared ? (_submittedQuery.Length > 0 ? $"No matches for “{_submittedQuery}”" : "Nothing here with these filters") : "Your archive, ready to discover";
+        EmptyDescription.Text = !_status.Connected ? "Reconnect this drive to pick up where you left off." : _searching ? "Finding files that match your search." : _searchError is not null ? "Try again. Your search and filters are still here." : prepared ? "Your filters may be narrowing things down. Try one of these:" : "Choose folders to make your photos, videos and documents searchable offline.";
+        EmptyGlyph.Text = !_status.Connected ? "" : _searchError is not null ? "" : prepared ? "" : "";
         EmptyAction.Content = _searchError is not null ? "Try search again" : prepared ? "Clear search and filters" : "Prepare this drive";
         EmptyAction.Visibility = _searching ? Visibility.Collapsed : Visibility.Visible;
         EmptyAction.IsEnabled = _status.Connected && _backend is not null;
         EmptyState.Visibility = Visibility.Visible;
+        // Concrete next steps for an empty result, each undoing one narrowing choice.
+        EmptySuggestions.Children.Clear();
+        void Suggest(string text, string action, Func<Task> run)
+        {
+            var row = new DockPanel { Margin = new Thickness(16, 10, 12, 10) };
+            var button = new Button { Content = action, FontSize = 13, MinHeight = 30, Padding = new Thickness(12, 0, 12, 0) };
+            button.Click += async (_, _) => await run();
+            DockPanel.SetDock(button, Dock.Right); row.Children.Add(button);
+            row.Children.Add(new TextBlock { Text = text, FontSize = 13, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) });
+            if (EmptySuggestions.Children.Count > 0) { var line = new Border { Height = 1 }; line.SetResourceReference(Border.BackgroundProperty, "BorderBrush"); EmptySuggestions.Children.Add(line); }
+            EmptySuggestions.Children.Add(row);
+        }
+        if (noMatches)
+        {
+            if (_filters.ExactOnly) Suggest("Search by meaning instead of exact words", "Turn off Exact words", async () => { ExactFilter.IsChecked = false; await Task.CompletedTask; });
+            if (_filters.KindIndex > 0) Suggest("Include every type of file", "Show all types", async () => { KindFilter.SelectedIndex = 0; await Task.CompletedTask; });
+            if (_filters.DateIndex > 0 || _filters.Folder is not null || _filters.PersonId is Guid person && person != Guid.Empty)
+                Suggest("Remove the date, folder and person filters", "Clear filters", async () => { var kind = KindFilter.SelectedIndex; var exact = ExactFilter.IsChecked; ResetFilterControls(); var initialized = _initialized; _initialized = false; KindFilter.SelectedIndex = kind; ExactFilter.IsChecked = exact; _initialized = initialized; await SearchAsync(true); });
+            if (_boundedSearch && SearchMoreButton.Tag is int) Suggest("Look past the closest matches", "Search deeper", async () => await SearchDeeperAsync());
+        }
+        EmptySuggestionsCard.Visibility = EmptySuggestions.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (EmptySuggestions.Children.Count == 0 && noMatches) EmptyDescription.Text = "Try a broader description, or words you remember from the file.";
     }
     private async void EmptyActionClick(object sender, RoutedEventArgs e)
     {
@@ -364,12 +502,16 @@ public partial class MainWindow : Window
         var cancellation = _previewCancellation = new();
         _selectedResult = result; _lastResultId = result.FileId; _preview = null; StopPlayback();
         foreach (var tile in CurrentTiles) tile.IsSelected = tile.Result.FileId == result.FileId;
-        MomentsList.ItemsSource = null; MomentsHeading.Visibility = Visibility.Collapsed; PreviewText.Visibility = Visibility.Visible;
-        PreviewName.Text = result.Name; PreviewPath.Text = result.RelativePath; PreviewText.Text = result.Snippet;
+        MomentsList.ItemsSource = null; MomentsHeading.Visibility = Visibility.Collapsed; MomentMarkers.Children.Clear(); _markedDuration = 0;
+        PreviewName.Text = result.Name; PreviewPath.Text = result.RelativePath.Replace('\\', '/').Replace("/", " › "); SetPreviewText(result.Snippet);
         PreviewMediaRow.Height = new GridLength(200);
         PreviewImage.Source = null; PreviewPlaceholder.Text = "Loading preview…"; PreviewPlaceholder.Visibility = Visibility.Visible;
         PreviewPanel.Visibility = Visibility.Visible; ApplyResponsiveLayout(); UpdateLayout();
-        PreviewDetails.Text = $"{result.Kind} · {FormatBytes(result.Bytes)} · {result.ModifiedUtc.ToLocalTime():dd MMM yyyy}";
+        var tileKind = CurrentTiles.FirstOrDefault(t => t.Result.FileId == result.FileId)?.KindLabel ?? result.Kind.ToString();
+        PreviewDetails.Text = $"{tileKind} · {FormatBytes(result.Bytes)}";
+        PreviewDate.Text = result.ModifiedUtc.ToLocalTime().ToString("d MMMM yyyy, HH:mm");
+        var index = CurrentTiles.ToList().FindIndex(t => t.Result.FileId == result.FileId);
+        PreviewPreviousButton.IsEnabled = index > 0; PreviewNextButton.IsEnabled = index >= 0 && index < CurrentTiles.Count - 1;
         PossibleMatchBanner.Visibility = result.MatchCategory == MatchCategory.PossiblePersonAction ? Visibility.Visible : Visibility.Collapsed;
         PersonEvidenceDetails.Visibility = Visibility.Collapsed;
         PersonEvidenceFaces.Visibility = Visibility.Collapsed; PersonEvidenceFaces.ItemsSource = null;
@@ -378,24 +520,25 @@ public partial class MainWindow : Window
         {
             var preview = await _backend.GetPreviewAsync(ResultPreview.Request(result, segmentId), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested(); _preview = preview;
-            PreviewText.Text = string.IsNullOrWhiteSpace(preview.Text) ? result.Snippet : preview.Text;
-            PreviewText.Visibility = string.IsNullOrWhiteSpace(PreviewText.Text) ? Visibility.Collapsed : Visibility.Visible;
+            SetPreviewText(string.IsNullOrWhiteSpace(preview.Text) ? result.Snippet : preview.Text);
             var moments = result.MatchedPersonIds.Count > 0 ? result.Moments : preview.Moments.Count > 0 ? preview.Moments : result.Moments;
             var showMoments = moments.Count > 1 || result.Kind is FileKind.Video or FileKind.Audio;
             MomentsList.ItemsSource = showMoments ? moments : [];
             MomentsHeading.Visibility = showMoments ? Visibility.Visible : Visibility.Collapsed;
+            MomentsHeading.Text = moments.Count == 1 ? "Matching moment" : $"{moments.Count:N0} matching moments";
+            _markerMoments = result.Kind is FileKind.Video or FileKind.Audio ? moments : [];
             if (preview.PersonEvidence.Count > 0)
             {
-                var time = preview.PersonEvidence[0].StartMs;
-                PersonEvidenceDetails.Text = "Face evidence: " + string.Join(", ", preview.PersonEvidence.Select(e => e.Name).Distinct()) + (time is long at ? $" at {TimeSpan.FromMilliseconds(at):hh\\:mm\\:ss\\.fff}" : "") + ". A sampled face does not verify an action or the speaker.";
-                PersonEvidenceDetails.Visibility = Visibility.Visible;
+                // The faces list and the possible-match note already explain the evidence;
+                // this line only appears when an older library lacks the context frame.
+                PersonEvidenceDetails.Text = ""; PersonEvidenceDetails.Visibility = Visibility.Collapsed;
                 var faceTiles = new List<EvidenceFaceTile>();
                 foreach (var evidence in preview.PersonEvidence)
                 {
                     var portrait = await _thumbnails.ReadAsync(evidence.Portrait, cancellation.Token);
                     cancellation.Token.ThrowIfCancellationRequested();
-                    var timestamp = evidence.StartMs is long sample ? $"{TimeSpan.FromMilliseconds(sample):hh\\:mm\\:ss\\.fff} · " : "";
-                    faceTiles.Add(new(evidence.Name, timestamp + (evidence.Confirmed ? "Confirmed membership" : "Suggested membership"), portrait));
+                    var timestamp = evidence.StartMs is long sample ? $"At {ClockFormat.Format(sample)} · " : "";
+                    faceTiles.Add(new(evidence.Name, timestamp + (evidence.Confirmed ? "Confirmed match" : "Possible match"), portrait));
                 }
                 PersonEvidenceFaces.ItemsSource = faceTiles; PersonEvidenceFaces.Visibility = Visibility.Visible;
                 if (faceTiles.FirstOrDefault() is { Portrait: not null } firstFace)
@@ -455,7 +598,7 @@ public partial class MainWindow : Window
                     : "Sampled face crop from this older library. Play or seek to view surrounding footage."
                 : null;
             if (_showingPreparedFrame && evidence?.Thumbnail is null)
-                PersonEvidenceDetails.Text += " Showing saved face crop; context frame unavailable.";
+            { PersonEvidenceDetails.Text = "Showing saved face crop; the surrounding frame is unavailable in this older library."; PersonEvidenceDetails.Visibility = Visibility.Visible; }
             VideoPlayer.Width = VideoPlayer.Height = audioOnly ? 1 : double.NaN;
             VideoPlayer.HorizontalAlignment = audioOnly ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
             VideoPlayer.VerticalAlignment = audioOnly ? VerticalAlignment.Top : VerticalAlignment.Stretch;
@@ -464,7 +607,7 @@ public partial class MainWindow : Window
             PreviewPlaceholder.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
             VideoPlayer.UpdateLayout();
             _player ??= new PreviewPlayerClient(_root, VideoPlayer.WindowHandle);
-            PlayPauseButton.Content = "Play"; AutomationProperties.SetName(PlayPauseButton, "Play playback");
+            PlayPauseButton.Content = ""; AutomationProperties.SetName(PlayPauseButton, "Play playback");
             PreviewTime.Text = FormatTime(preview.StartMs ?? 0);
             await _player.OpenAsync(preview.OriginalPath, preview.StartMs ?? 0, token); StartPlaybackPolling();
         }
@@ -486,6 +629,47 @@ public partial class MainWindow : Window
     private async void PlayPauseClick(object sender, RoutedEventArgs e) { if (_player is null) return; try { await _player.PauseAsync(); ShowDecodedVideo(); } catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); } }
     private async void MomentClick(object sender, RoutedEventArgs e) { if (_selectedResult is not null && (sender as FrameworkElement)?.Tag is SearchMoment moment) await SelectResultAsync(_selectedResult, moment.SegmentId); }
     private void ClosePreviewClick(object sender, RoutedEventArgs e) => ClosePreview(true);
+    private void PreviewScrimClick(object sender, MouseButtonEventArgs e) => ClosePreview(true);
+    private async void PreviewPreviousClick(object sender, RoutedEventArgs e) => await StepPreviewAsync(-1);
+    private async void PreviewNextClick(object sender, RoutedEventArgs e) => await StepPreviewAsync(1);
+    private async Task StepPreviewAsync(int direction)
+    {
+        var index = CurrentTiles.ToList().FindIndex(t => t.Result.FileId == _selectedResult?.FileId);
+        if (index < 0 || index + direction < 0 || index + direction >= CurrentTiles.Count) return;
+        var tile = CurrentTiles[index + direction];
+        if (!_listMode && Rows.ElementAtOrDefault(ContactSheetLayout.GetRowIndex(_sheetRows, index + direction)) is { } row) Gallery.ScrollIntoView(row);
+        if (_listMode) { MetadataList.SelectedItem = tile; MetadataList.ScrollIntoView(tile); }
+        else await SelectResultAsync(tile.Result);
+    }
+    private void CopyPathClick(object sender, RoutedEventArgs e)
+    {
+        try { var path = _preview?.OriginalPath ?? (_selectedResult is null ? null : SafePath(_selectedResult.RelativePath)); if (path is not null) { Clipboard.SetText(path); Notice("File path copied.", false); } }
+        catch (Exception ex) { Notice($"Could not copy the path: {ex.Message}"); }
+    }
+    // Document text with the submitted words highlighted, so the match is visible at a glance.
+    private void SetPreviewText(string text)
+    {
+        _previewPlainText = text ?? "";
+        PreviewText.Inlines.Clear();
+        PreviewText.Visibility = string.IsNullOrWhiteSpace(_previewPlainText) ? Visibility.Collapsed : Visibility.Visible;
+        if (_previewPlainText.Length == 0) return;
+        var terms = _submittedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Where(term => term.Length >= 3).Select(System.Text.RegularExpressions.Regex.Escape).ToArray();
+        if (terms.Length == 0) { PreviewText.Inlines.Add(new System.Windows.Documents.Run(_previewPlainText)); return; }
+        var pattern = new System.Text.RegularExpressions.Regex(string.Join("|", terms), System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
+        var position = 0;
+        try
+        {
+            foreach (System.Text.RegularExpressions.Match match in pattern.Matches(_previewPlainText))
+            {
+                if (match.Index > position) PreviewText.Inlines.Add(new System.Windows.Documents.Run(_previewPlainText[position..match.Index]));
+                var highlight = new System.Windows.Documents.Run(match.Value) { FontWeight = FontWeights.SemiBold };
+                highlight.SetResourceReference(System.Windows.Documents.TextElement.BackgroundProperty, "WarningTintBrush");
+                PreviewText.Inlines.Add(highlight); position = match.Index + match.Length;
+            }
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { }
+        if (position < _previewPlainText.Length) PreviewText.Inlines.Add(new System.Windows.Documents.Run(_previewPlainText[position..]));
+    }
     private void ClosePreview(bool restoreFocus = false) { _previewCancellation?.Cancel(); StopPlayback(); _preview = null; _selectedResult = null; MetadataList.SelectedItem = null; foreach (var tile in CurrentTiles) tile.IsSelected = false; ApplyResponsiveLayout(); ArrangeRows(true); if (restoreFocus) RestoreResultFocus(); }
     private void OpenOriginalClick(object sender, RoutedEventArgs e) => OpenOriginal();
     private void OpenOriginal()
@@ -522,7 +706,7 @@ public partial class MainWindow : Window
         if (_backend is null || !_status.Connected || _preparationTask is { IsCompleted: false }) return;
         if (_preparationFolders.Count == 0) { Notice("Add at least one folder to prepare."); return; }
         _prepareCancellation?.Dispose(); _prepareCancellation = new();
-        _preparationUiBusy = true; UpdatePreparationControls(); ProgressCard.Visibility = Visibility.Visible;
+        _preparationUiBusy = true; _preparationPaused = false; UpdatePreparationControls(); UpdateDriveSummary(); ProgressCard.Visibility = Visibility.Visible; ProgressMessage.Text = "";
         var progress = new Progress<PreparationProgress>(UpdateProgress);
         var request = new PreparationRequest { Folders = _preparationFolders.ToArray(), VerifyContents = VerifyContents.IsChecked == true, OcrLanguages = OcrLanguages.SelectedIndex switch { 1 => ["eng"], 2 => ["ara"], _ => ["eng", "ara"] } };
         _preparationTask = PrepareCoreAsync(request, progress, _prepareCancellation.Token);
@@ -531,9 +715,34 @@ public partial class MainWindow : Window
     private async Task PrepareCoreAsync(PreparationRequest request, IProgress<PreparationProgress> progress, CancellationToken token)
     {
         try { _status = await _backend!.PrepareAsync(request, progress, token); Notice("Preparation complete. Your updated archive is ready to search."); await RefreshStatusAsync(); await LoadPeopleAsync(); }
-        catch (OperationCanceledException) { ProgressStage.Text = "Preparation paused"; ProgressMessage.Text = "Completed files are saved. Choose Prepare drive to resume."; }
+        catch (OperationCanceledException) { _preparationPaused = true; ProgressStage.Text = "Paused"; ProgressMessage.Text = "Finished files are saved. Choose Resume to continue."; UpdateStageStrip(null, paused: true); }
         catch (Exception ex) { ProgressStage.Text = "Preparation stopped"; Notice($"Preparation could not continue: {ex.Message}"); }
-        finally { _preparationUiBusy = false; StartPreparationButton.Content = "Prepare / resume"; UpdatePreparationControls(); }
+        finally { _preparationUiBusy = false; UpdatePreparationControls(); UpdateDriveSummary(); }
+    }
+    private static readonly string[] StageNames = ["Finding files", "Reading your files", "Making it searchable", "Faces and speech", "Saving"];
+    private int _stageIndex;
+    private void BuildStageStrip()
+    {
+        StageStrip.Children.Clear();
+        foreach (var name in StageNames)
+        {
+            var stage = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
+            var bar = new Border { Height = 3, CornerRadius = new CornerRadius(2) }; bar.SetResourceReference(Border.BackgroundProperty, "TrackBrush");
+            var label = new TextBlock { Text = name, FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis }; label.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+            stage.Children.Add(bar); stage.Children.Add(label); StageStrip.Children.Add(stage);
+        }
+    }
+    private void UpdateStageStrip(int? current, bool paused = false)
+    {
+        if (current is int index) _stageIndex = index;
+        for (var i = 0; i < StageStrip.Children.Count; i++)
+        {
+            if (StageStrip.Children[i] is not StackPanel { Children: [Border bar, TextBlock label] }) continue;
+            var done = i < _stageIndex; var active = i == _stageIndex;
+            bar.SetResourceReference(Border.BackgroundProperty, done || active ? (active && paused ? "WarningBrush" : "AccentBrush") : "TrackBrush");
+            label.SetResourceReference(TextBlock.ForegroundProperty, done || active ? "InkBrush" : "MutedBrush");
+            label.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        }
     }
     private void UpdatePreparationControls()
     {
@@ -546,7 +755,9 @@ public partial class MainWindow : Window
     private void UpdateProgress(PreparationProgress progress)
     {
         ProgressCard.Visibility = Visibility.Visible;
-        ProgressStage.Text = progress.Stage switch { PreparationStage.Discovering => "Discovering files", PreparationStage.Extracting => "Reading your files", PreparationStage.Embedding => "Making content searchable", PreparationStage.RecognizingPeople => "Finding familiar faces", PreparationStage.Transcribing => "Listening for speech", PreparationStage.Publishing => "Saving this update", PreparationStage.Completed => "Ready to travel", PreparationStage.Paused => "Preparation paused", _ => "Preparing your archive" };
+        var percent = progress.Fraction is double fraction ? $" · {Math.Clamp(fraction, 0, 1):P0}" : "";
+        ProgressStage.Text = progress.Stage switch { PreparationStage.Discovering => "Finding files", PreparationStage.Extracting => "Reading your files", PreparationStage.Embedding => "Making content searchable", PreparationStage.RecognizingPeople => "Finding familiar faces", PreparationStage.Transcribing => "Listening for speech", PreparationStage.Publishing => "Saving this update", PreparationStage.Completed => "Ready to travel", PreparationStage.Paused => "Paused", _ => "Preparing your files" } + (progress.Stage is PreparationStage.Completed or PreparationStage.Paused ? "" : percent);
+        UpdateStageStrip(progress.Stage switch { PreparationStage.Discovering => 0, PreparationStage.Extracting => 1, PreparationStage.Embedding => 2, PreparationStage.RecognizingPeople or PreparationStage.Transcribing => 3, PreparationStage.Publishing => 4, PreparationStage.Completed => 5, _ => null }, progress.Stage == PreparationStage.Paused);
         PreparationProgressBar.IsIndeterminate = progress.Fraction is null; PreparationProgressBar.Value = Math.Clamp(progress.Fraction ?? 0, 0, 1);
         ProgressSummary.Text = $"{progress.Completed:N0} processed · {progress.Unchanged:N0} unchanged · {progress.Failed:N0} needing attention";
         ProgressPath.Text = progress.CurrentPath; ProgressMessage.Text = progress.Message;
@@ -556,7 +767,7 @@ public partial class MainWindow : Window
 
     private void WindowKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.K && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { Navigate("search"); QueryBox.Focus(); QueryBox.SelectAll(); e.Handled = true; }
+        if (e.Key == Key.K && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { var box = HomePage.IsVisible ? HeroQueryBox : QueryBox; box.Focus(); box.SelectAll(); e.Handled = true; }
         else if (e.Key == Key.Escape)
         {
             var openCombo = VisualChildren<ComboBox>(this).FirstOrDefault(combo => combo.IsDropDownOpen) ?? VisualChildren<ComboBox>(FiltersPopup.Child).FirstOrDefault(combo => combo.IsDropDownOpen);
@@ -615,14 +826,23 @@ public partial class MainWindow : Window
         if (!full.StartsWith(_root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("File path is outside this archive.");
         return full;
     }
-    private static string FormatTime(long milliseconds) => TimeSpan.FromMilliseconds(milliseconds).ToString(@"hh\:mm\:ss");
+    private static string FormatTime(long milliseconds) => ClockFormat.Format(milliseconds);
     private static string FormatBytes(long value) => value >= 1024L * 1024 * 1024 ? $"{value / (1024d * 1024 * 1024):N1} GB" : value >= 1024L * 1024 ? $"{value / (1024d * 1024):N1} MB" : value >= 1024 ? $"{value / 1024d:N1} KB" : $"{value:N0} B";
-    private void EjectClick(object sender, RoutedEventArgs e) { _ejectRequested = true; Close(); }
-    private void UpdatesClick(object sender, RoutedEventArgs e)
+    private void EjectClick(object sender, RoutedEventArgs e)
     {
-        UpdatesButton.ContextMenu.PlacementTarget = UpdatesButton;
-        UpdatesButton.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
-        UpdatesButton.ContextMenu.IsOpen = true;
+        if (!ThemedDialog.Confirm(this, "FindIt closes and Windows safely removes the drive. Your search index and people stay on the drive for next time.", $"Close FindIt and eject {_status.DisplayName}?", "Close and _eject")) return;
+        _ejectRequested = true; Close();
+    }
+    // Custom title bar: caption buttons and maximized-window insets.
+    private void MinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void MaximizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    private void CloseWindowClick(object sender, RoutedEventArgs e) => Close();
+    private void WindowStateChanged(object? sender, EventArgs e)
+    {
+        // A maximized chrome-less window extends past the monitor by the resize frame.
+        RootLayout.Margin = WindowState == WindowState.Maximized ? SystemParameters.WindowResizeBorderThickness : new Thickness(0);
+        MaximizeButton.Content = WindowState == WindowState.Maximized ? "" : "";
+        AutomationProperties.SetName(MaximizeButton, WindowState == WindowState.Maximized ? "Restore" : "Maximize");
     }
     private async void CheckUpdatesClick(object sender, RoutedEventArgs e)
     {
@@ -672,7 +892,7 @@ public partial class MainWindow : Window
         if (_closing) return;
         if (!TryLeavePersonEditor()) { _ejectRequested = false; return; }
         _closing = true; foreach (var request in _portraitRequests.Values.ToArray()) request.Cancel(); DisposeAppearance(); StopPlaybackPolling(); _statusTimer.Stop(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel(); _prepareCancellation?.Cancel(); _updateCancellation?.Cancel();
-        FooterStatus.Text = "Closing archive and releasing this drive…";
+        FooterStatus.Text = "Closing archive and releasing this drive…"; ConnectionLabel.Text = "Closing…";
         try
         {
             if (_preparationTask is not null) await _preparationTask;

@@ -56,6 +56,12 @@ public partial class MainWindow
             await Click(chip);
             Check("remove-" + key + "-chip", !ActiveFilterPanel.Children.OfType<Button>().Any(b => Equals(b.Tag, key)));
         }
+        // Exact words is an inline switch in the filter bar rather than a removable chip.
+        async Task ClearExact()
+        {
+            ExactFilter.IsChecked = false; await Idle();
+            Check("exact-switch-off", !_filters.ExactOnly && !backend.Requests.Last().Filters.ExactOnly);
+        }
         void AnswerPersonDraft(string answer)
         {
             Dispatcher.BeginInvoke(() =>
@@ -88,9 +94,11 @@ public partial class MainWindow
         void CheckContactSheetWidth(string label)
         {
             var viewport = VisualChildren<ScrollViewer>(Gallery).First().ViewportWidth;
-            var available = Math.Max(120, viewport - 8);
+            var available = Math.Max(120, viewport - GalleryGap);
             var fullRows = _sheetRows.Take(Math.Max(0, _sheetRows.Count - 1)).ToArray();
-            var geometryWidthMatches = fullRows.Length > 0 && fullRows.All(row => Math.Abs(row.Widths.Sum() + (row.Count - 1) * 8 - available) <= 1);
+            var geometryWidthMatches = fullRows.Length > 0 && fullRows.All(row => Math.Abs(row.Widths.Sum() + (row.Count - 1) * GalleryGap - available) <= 1);
+            var uniformTiles = fullRows.All(row => row.Widths.All(width => Math.Abs(width - row.Widths[0]) <= 1.5));
+            geometryWidthMatches &= uniformTiles;
             Check(label, Gallery.IsVisible && _sheetRows.Count == Rows.Count && Math.Abs(_sheetWidth - available) <= 1 && geometryWidthMatches,
                 new { viewport, available, arrangedWidth = _sheetWidth, galleryWidth = Gallery.ActualWidth, rowCount = _sheetRows.Count, geometryWidthMatches });
         }
@@ -99,9 +107,14 @@ public partial class MainWindow
             Width = 1400; Height = 900;
             await AttachBackendAsync(backend); _statusTimer.Stop(); await Idle();
             Check("small-file-sizes-use-readable-units", FormatBytes(123).Contains("123", StringComparison.Ordinal) && FormatBytes(123).EndsWith(" B", StringComparison.Ordinal) && FormatBytes(1024).EndsWith(" KB", StringComparison.Ordinal) && !FormatBytes(1024).StartsWith("0", StringComparison.Ordinal));
-            Check("initial-prepared-library", SearchPage.IsVisible && CurrentTiles.Count == 256 && _people.Count == 40 && _searchGeneration == 42 && NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
-            LayoutCheck("regular-library-layout", QueryBox, SearchHeadingRow, AllTab, AudioTab, FiltersButton, Gallery, PaginationBar);
-            Check("icon-actions-have-accessible-names", new[] { ThemeButton, UpdatesButton, EjectButton, GridViewButton, ListViewButton, FiltersButton }.All(button => !string.IsNullOrWhiteSpace(System.Windows.Automation.AutomationProperties.GetName(button))));
+            Check("initial-home-with-loaded-library", HomePage.IsVisible && !TitleSearchHost.IsVisible && SearchNav.IsChecked == true && CurrentTiles.Count == 256 && _people.Count == 40 && _searchGeneration == 42 && NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
+            Check("home-shows-recent-files-and-people", RecentTiles.Count == 12 && HomePeopleList.Items.Count == 8 && HomeLibrarySections.IsVisible && !HomeSetupCard.IsVisible && PhotoCount.Text.Contains("photo"),
+                new { recent = RecentTiles.Count, people = HomePeopleList.Items.Count, PhotoCount.Text });
+            var requestsBeforeBrowse = backend.Requests.Count;
+            await Click(BrowseNav);
+            Check("browse-reuses-loaded-window", SearchPage.IsVisible && BrowseNav.IsChecked == true && FolderPane.IsVisible && SearchTitle.Text == "All files" && backend.Requests.Count == requestsBeforeBrowse && CurrentTiles.All(tile => tile.ReasonBadge is null));
+            LayoutCheck("regular-library-layout", QueryBox, SearchHeadingRow, AllTab, AudioTab, FiltersButton, Gallery, PaginationBar, FolderPane);
+            Check("icon-actions-have-accessible-names", new ButtonBase[] { EjectButton, GridViewButton, ListViewButton, FiltersButton, SearchNav, BrowseNav, PeopleNav, DriveNav, SettingsNav, MinimizeButton, MaximizeButton, CloseButton, DriveStatusButton, PreviewPreviousButton, PreviewNextButton }.All(button => !string.IsNullOrWhiteSpace(System.Windows.Automation.AutomationProperties.GetName(button))));
             Check("tabs-and-filters-do-not-overlap", Bounds(AudioTab).Right <= Bounds(FiltersButton).Left);
             QueryBox.Focus(); await Idle(); var focusedQueryHeight = QueryBox.ActualHeight;
             FiltersButton.Focus(); await Idle();
@@ -120,9 +133,9 @@ public partial class MainWindow
             Check("closing-filter-popover-restores-focus", !FiltersPopup.IsOpen && FiltersButton.IsKeyboardFocused);
 
             ExactFilter.IsChecked = true; await Idle();
-            Check("exact-filter", backend.Requests.Last().Filters.ExactOnly); await RemoveChip("exact");
-            Check("removing-chip-restores-filter-focus", FiltersButton.IsKeyboardFocused);
+            Check("exact-filter", backend.Requests.Last().Filters.ExactOnly && ExactFilter.IsChecked == true); await ClearExact();
             PersonFilter.SelectedIndex = 7; await Idle();
+            Check("person-filter-chip-and-count", ActiveFilterPanel.Children.OfType<Button>().Any(b => Equals(b.Tag, "person")) && FilterCountText.Text == "1" && SearchTitle.Text == ((PersonChip)PersonFilter.SelectedItem).Name);
             var selectedPerson = ((PersonChip)PersonFilter.SelectedItem).PersonId;
             FolderFilter.SelectedIndex = 2; await Idle();
             var selectedFolder = ((FolderChoice)FolderFilter.SelectedItem).Path;
@@ -130,6 +143,7 @@ public partial class MainWindow
             backend.ReverseFolders = true; await RefreshStatusAsync(); await LoadPeopleAsync(); await Idle();
             Check("refresh-preserves-identity-without-search", _filters.PersonId == selectedPerson && _filters.Folder == selectedFolder && backend.Requests.Count == beforeRefresh);
             await RemoveChip("person"); Check("person-filter-removed", backend.Requests.Last().Filters.PersonIds.Count == 0);
+            Check("removing-chip-restores-filter-focus", FiltersButton.IsKeyboardFocused);
             await RemoveChip("folder"); Check("folder-filter-removed", backend.Requests.Last().Filters.Folder is null);
             DateFilter.SelectedIndex = 1; await Idle(); Check("date-preset", backend.Requests.Last().Filters.AfterUtc is not null);
             var datePresetCutoff = backend.Requests.Last().Filters.AfterUtc;
@@ -144,10 +158,11 @@ public partial class MainWindow
 
             QueryBox.Text = "sample"; SearchClick(this, new RoutedEventArgs()); await Idle();
             Check("unknown-total-has-more-label", ResultCount.Text.Contains("More results available") && !ResultCount.Text.Contains("of 650"));
+            Check("search-switches-to-results-mode", SearchTitle.Text.Contains("sample") && SearchNav.IsChecked == true && BrowseNav.IsChecked == false && !FolderPane.IsVisible && SuggestionPanel.Children.OfType<Button>().Any(b => Equals(b.Content, "sample")));
             QueryBox.Text = "unsent draft";
             ExactFilter.IsChecked = true; await Idle();
             Check("filter-keeps-submitted-query", backend.Requests.Last().Query == "sample" && _submittedQuery == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == 256);
-            await RemoveChip("exact");
+            await ClearExact();
             Check("removing-filter-keeps-submitted-query", backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft");
             var selectedBeforePage = CurrentTiles.First(tile => tile.Result.Kind == FileKind.Document);
             await SelectResultAsync(selectedBeforePage.Result); await Idle();
@@ -210,7 +225,7 @@ public partial class MainWindow
             ExactFilter.IsChecked = true; await Idle(); var viewFilters = _filters; var viewRequests = backend.Requests.Count;
             await Click(ListViewButton); Check("list-view-keeps-filter-state", _listMode && MetadataList.IsVisible && _filters == viewFilters && backend.Requests.Count == viewRequests);
             await Click(GridViewButton); Check("grid-view-keeps-filter-state", !_listMode && Gallery.IsVisible && _filters == viewFilters && backend.Requests.Count == viewRequests);
-            await RemoveChip("exact");
+            await ClearExact();
             await Click(ListViewButton);
             var firstListRow = MetadataList.ItemContainerGenerator.ContainerFromIndex(0) as ListViewItem;
             var firstListName = firstListRow is null ? null : System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(firstListRow)?.GetName();
@@ -247,7 +262,11 @@ public partial class MainWindow
 
             var document = CurrentTiles.First(t => t.Result.Kind == FileKind.Document);
             await SelectResultAsync(document.Result); await Idle();
-            Check("document-inspector", _preview?.Kind == FileKind.Document && PreviewPanel.IsVisible && _selectedResult?.FileId == document.Result.FileId && PreviewText.Text.Contains("in-memory"));
+            Check("document-inspector", _preview?.Kind == FileKind.Document && PreviewPanel.IsVisible && _selectedResult?.FileId == document.Result.FileId && _previewPlainText.Contains("in-memory") && PreviewTextCard.IsVisible);
+            var documentIndex = CurrentTiles.IndexOf(document);
+            await Click(PreviewNextButton);
+            Check("preview-next-steps-through-results", _selectedResult?.FileId == CurrentTiles[documentIndex + 1].Result.FileId && PreviewPreviousButton.IsEnabled);
+            await SelectResultAsync(document.Result); await Idle();
             LayoutCheck("regular-inspector-layout", QueryBox, Gallery, PreviewPanel);
             CheckContactSheetWidth("opening-docked-inspector-reflows-gallery");
             var dockedGalleryWidth = Gallery.ActualWidth;
@@ -265,19 +284,20 @@ public partial class MainWindow
                 new { expectedFile = document.Result.FileId, focusedFile = restoredTile?.Result.FileId });
             await SelectResultAsync(document.Result); await Idle();
             Width = 880; Height = 520; await Idle();
-            Check("compact-inspector-has-back-and-search", QueryBox.IsVisible && QueryBox.ActualWidth > 200 && LibraryResultsPanel.Visibility == Visibility.Collapsed && PreviewBackButton.IsVisible);
-            LayoutCheck("compact-inspector-layout", QueryBox, PreviewPanel, PreviewBackButton);
+            Check("compact-inspector-is-sheet-over-results", QueryBox.IsVisible && QueryBox.ActualWidth > 200 && LibraryResultsPanel.IsVisible && PreviewScrim.IsVisible && PreviewPanel.ActualWidth <= 441 && Bounds(PreviewPanel).Right >= Bounds(ResultsArea).Right - 1,
+                new { panelWidth = PreviewPanel.ActualWidth, panelRight = Bounds(PreviewPanel).Right, areaRight = Bounds(ResultsArea).Right });
+            LayoutCheck("compact-inspector-layout", QueryBox, PreviewPanel, PreviewScrim);
             // Layout-only regression: use the media shape without creating a player or opening media.
             _preview = _preview! with { Kind = FileKind.Video };
             VideoControls.Visibility = Visibility.Visible; PossibleMatchBanner.Visibility = Visibility.Visible;
             ApplyResponsiveLayout(); await Idle();
-            var previewActions = VisualChildren<WrapPanel>(PreviewPanel).Single(panel => panel.Children.OfType<Button>().Any(button => Equals(button.Content, "Open original")));
+            var previewActions = VisualChildren<WrapPanel>(PreviewPanel).Single(panel => panel.Children.Contains(OpenOriginalButton));
             var previewScroll = VisualChildren<ScrollViewer>(PreviewPanel).Single(viewer => viewer.IsAncestorOf(VideoControls));
             var panelBounds = Bounds(PreviewPanel); var actionBounds = Bounds(previewActions); var imageBounds = Bounds(PreviewImage);
             Check("compact-video-layout-keeps-actions-visible", previewActions.IsVisible && actionBounds.Left >= panelBounds.Left && actionBounds.Right <= panelBounds.Right && actionBounds.Top >= imageBounds.Bottom && actionBounds.Bottom <= panelBounds.Bottom && previewScroll.ViewportHeight > 0,
                 new { panelTop = panelBounds.Top, panelBottom = panelBounds.Bottom, actionTop = actionBounds.Top, actionBottom = actionBounds.Bottom, mediaBottom = imageBounds.Bottom, scrollViewport = previewScroll.ViewportHeight, mediaHeight = PreviewMediaRow.ActualHeight });
             Check("media-controls-and-match-banner-scroll-outside-frame", previewScroll.IsAncestorOf(VideoControls) && previewScroll.IsAncestorOf(PossibleMatchBanner) && VideoPlayer.Visibility == Visibility.Collapsed && _player is null);
-            LayoutCheck("compact-video-action-layout", QueryBox, PreviewPanel, PreviewBackButton, previewActions);
+            LayoutCheck("compact-video-action-layout", QueryBox, PreviewPanel, previewActions);
             Width = 1366; Height = 768;
             Notice("A sampled face falls within this scene. Check the surrounding footage: action, role and speaker are not verified.");
             PersonEvidenceFaces.ItemsSource = new[] { new EvidenceFaceTile("Sample person", "00:00:06.500 · Confirmed membership", null) };
@@ -288,8 +308,8 @@ public partial class MainWindow
             Check("face-evidence-crops-share-scroll-with-controls", previewScroll.IsAncestorOf(PersonEvidenceFaces));
             PersonEvidenceFaces.Visibility = Visibility.Collapsed; PersonEvidenceFaces.ItemsSource = null; HideNotice(true);
             Width = 880; Height = 520; ApplyResponsiveLayout(); await Idle();
-            await Click(PreviewBackButton);
-            Check("compact-back-restores-gallery", _selectedResult is null && Gallery.IsVisible && LibraryResultsPanel.IsVisible);
+            PreviewScrimClick(PreviewScrim, null!); await Idle();
+            Check("compact-scrim-closes-sheet", _selectedResult is null && Gallery.IsVisible && LibraryResultsPanel.IsVisible && !PreviewScrim.IsVisible && !PreviewPanel.IsVisible);
             LayoutCheck("compact-library-layout", QueryBox, SearchHeadingRow, AllTab, AudioTab, FiltersButton, Gallery, PaginationBar);
             Check("compact-tabs-and-filters-do-not-overlap", Bounds(AudioTab).Right <= Bounds(FiltersButton).Left);
             await Click(FiltersButton);
@@ -335,9 +355,17 @@ public partial class MainWindow
             Check("person-save-completes-with-edited-record", !_savingPerson && PersonInspector.IsEnabled && PeopleGallery.IsEnabled && _editingPerson?.Id == editingId && PersonName.Text == "Saved person name" && !HasUnsavedPersonChanges);
             await Click(PersonBackButton);
             Width = 1400; Height = 900; await Idle();
-            await Click(FoldersNav);
+            await Click(SettingsNav);
+            Check("settings-page", SettingsPage.IsVisible && SettingsNav.IsChecked == true && ThemeLightOption.IsChecked == true && !string.IsNullOrWhiteSpace(VersionText.Text));
+            ThemeDarkOption.IsChecked = true; await Idle();
+            var darkLayer = ((System.Windows.Media.SolidColorBrush)FindResource("LayerBrush")).Color;
+            ThemeLightOption.IsChecked = true; await Idle();
+            Check("settings-theme-cards-switch-palette", darkLayer.R < 80 && ((System.Windows.Media.SolidColorBrush)FindResource("LayerBrush")).Color.R > 200 && !_dark);
+            await Click(DriveNav);
+            Check("drive-page", DrivePage.IsVisible && DriveNav.IsChecked == true && DriveTitle.Text == "Interaction QA archive" && DriveStatusText.Text.StartsWith("Ready to search", StringComparison.Ordinal) && PreparedFoldersCard.IsVisible && !WelcomeCard.IsVisible && Equals(StartPreparationButton.Content, "Update index"));
+            await Click(BrowseNav);
             var browse = VisualChildren<Button>(FolderList).First(b => b.Tag is FolderEntry); var folder = (FolderEntry)browse.Tag; await Click(browse);
-            Check("folder-browse-opens-filtered-library", SearchPage.IsVisible && _filters.Folder == folder.RelativePath && CurrentTiles.All(t => t.Result.RelativePath.StartsWith(folder.RelativePath + "/", StringComparison.Ordinal)));
+            Check("folder-browse-opens-filtered-library", SearchPage.IsVisible && _filters.Folder == folder.RelativePath && CurrentTiles.All(t => t.Result.RelativePath.StartsWith(folder.RelativePath + "/", StringComparison.Ordinal)) && SearchTitle.Text.Contains(folder.RelativePath.Split('/')[0]));
             await RemoveChip("folder");
 
             ExactFilter.IsChecked = true; await Idle(); var retainedFailureFilters = _filters;
@@ -345,7 +373,11 @@ public partial class MainWindow
             Check("failed-reset-clears-stale-results-and-offers-retry", CurrentTiles.Count == 0 && EmptyState.IsVisible && Equals(EmptyAction.Content, "Try search again") && _filters == retainedFailureFilters && _submittedQuery == "Sample 00");
             QueryBox.Text = "unsent retry draft"; await Click(EmptyAction);
             Check("search-retry-keeps-submitted-query-and-filters", CurrentTiles.Count > 0 && backend.Requests.Last().Query == "Sample 00" && QueryBox.Text == "unsent retry draft" && _filters == retainedFailureFilters);
-            await RemoveChip("exact");
+            await ClearExact();
+            QueryBox.Text = "zzzz no such file"; ExactFilter.IsChecked = true; await Idle(); SearchClick(this, new RoutedEventArgs()); await Idle();
+            Check("no-results-offers-concrete-fixes", CurrentTiles.Count == 0 && EmptyState.IsVisible && EmptyTitle.Text.Contains("zzzz") && EmptySuggestionsCard.IsVisible && VisualChildren<Button>(EmptySuggestions).Any(b => Equals(b.Content, "Turn off Exact words")));
+            await Click(VisualChildren<Button>(EmptySuggestions).First(b => Equals(b.Content, "Turn off Exact words")));
+            Check("no-results-fix-applies-filter", !_filters.ExactOnly && !backend.Requests.Last().Filters.ExactOnly && backend.Requests.Last().Query == "zzzz no such file");
 
             var cancellationsBeforeSlow = backend.CancelledSearches;
             QueryBox.Text = "slow"; SearchClick(this, new RoutedEventArgs()); await backend.SlowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));

@@ -17,10 +17,10 @@ public partial class MainWindow
     private IReadOnlyList<ContactSheetRow> _sheetRows = [];
     private double _sheetWidth;
     private int _sheetVersion;
-    private bool _aspectReflowQueued;
+
     private double _targetTileWidth = 220, _inspectorWidth = 340;
-    private bool _uiReady, _arranging, _listMode, _compactPreview, _personInspectorOpen, _playbackSmoke;
-    private int _returnAnchor, _peopleColumns;
+    private bool _uiReady, _arranging, _listMode, _personInspectorOpen, _playbackSmoke;
+    private int _peopleColumns;
     private bool _peopleRowsDirty;
     private Guid? _lastResultId;
     private readonly List<PersonTile> _personTiles = [];
@@ -55,15 +55,18 @@ public partial class MainWindow
             Chip(_filters.DateIndex switch { 1 => "Last 30 days", 2 => "This year", _ => $"{_filters.After?.ToString("dd MMM yyyy") ?? "Any date"} to {_filters.Before?.ToString("dd MMM yyyy") ?? "Any date"}" }, "date");
         if (_filters.Folder is { } folder) Chip("Folder: " + folder, "folder");
         if (_filters.PersonId is Guid person && person != Guid.Empty) Chip("Person: " + (PersonFilter.SelectedItem as PersonChip)?.Name, "person");
-        if (_filters.ExactOnly) Chip("Exact words", "exact");
-        if (ActiveFilterPanel.Children.Count > 0)
+        // Exact words is its own switch in the filter bar, so only popover filters become chips.
+        var popoverFilters = ActiveFilterPanel.Children.Count;
+        if (popoverFilters > 0 || _filters.ExactOnly)
         {
-            var clear = new Button { Content = "Clear filters", Style = (Style)FindResource("QuietButton"), MinHeight = 28, Padding = new Thickness(8, 3, 8, 3) };
+            var clear = new Button { Content = "Clear filters", Style = (Style)FindResource("LinkButton"), Margin = new Thickness(0, 0, 0, 6) };
             clear.Click += ClearFiltersClick; ActiveFilterPanel.Children.Add(clear);
             ActiveFilterPanel.Visibility = Visibility.Visible;
         }
         else ActiveFilterPanel.Visibility = Visibility.Collapsed;
-        FiltersButton.SetResourceReference(BackgroundProperty, ActiveFilterPanel.Children.Count > 0 ? "TintBrush" : "SurfaceBrush");
+        FilterCountText.Text = popoverFilters > 0 ? popoverFilters.ToString(System.Globalization.CultureInfo.CurrentCulture) : "";
+        FiltersButton.SetResourceReference(BackgroundProperty, popoverFilters > 0 ? "TintBrush" : "SurfaceBrush");
+        UpdateSearchMode();
     }
 
     private void FiltersClick(object sender, RoutedEventArgs e)
@@ -132,7 +135,8 @@ public partial class MainWindow
     private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; Navigate("search"); await SearchAsync(true, submitQuery: true); } }
     private async void PreviousClick(object sender, RoutedEventArgs e) { if (_page > 0) await SearchAsync(false, _page - 1); }
     private async void NextClick(object sender, RoutedEventArgs e) { if (_pageCursors.Count > _page + 1) await SearchAsync(false, _page + 1); }
-    private async void SearchMoreClick(object sender, RoutedEventArgs e)
+    private async void SearchMoreClick(object sender, RoutedEventArgs e) => await SearchDeeperAsync();
+    private async Task SearchDeeperAsync()
     {
         if (SearchMoreButton.Tag is not int budget) return;
         _searchBudget = Math.Min(16384, budget * 2);
@@ -152,14 +156,18 @@ public partial class MainWindow
         try
         {
             var scroll = VisualChildren<ScrollViewer>(Gallery).FirstOrDefault();
-            var available = Math.Max(120, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - 8);
+            var available = Math.Max(120, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - GalleryGap);
             if (!force && Math.Abs(available - _sheetWidth) < .5 && _sheetRows.Sum(row => row.Count) == CurrentTiles.Count && Rows.SelectMany(row => row.Tiles).SequenceEqual(CurrentTiles)) return;
             var anchor = GetGalleryAnchor();
             var focusedButton = Keyboard.FocusedElement as Button;
             var focusedTile = focusedButton?.DataContext as ResultTile;
             if (focusedTile is not null && !CurrentTiles.Contains(focusedTile)) focusedTile = null;
             _sheetWidth = available;
-            _sheetRows = ContactSheetLayout.Arrange(CurrentTiles.Select(tile => tile.AspectRatio).ToArray(), available, _targetTileWidth * .75);
+            // A uniform 4:3 grid: thumbnails crop to fill, so rows stay calm and scannable.
+            _sheetRows = ContactSheetLayout.Arrange(Enumerable.Repeat(4d / 3, CurrentTiles.Count).ToArray(), available, _targetTileWidth * .75, GalleryGap, GalleryCaption);
+            // Keep a short final row on the same columns as the rows above it.
+            if (_sheetRows.Count > 1 && _sheetRows[^1] is { } tail && _sheetRows[0] is { } full && tail.Count < full.Count)
+                _sheetRows = [.. _sheetRows.Take(_sheetRows.Count - 1), tail with { ThumbnailHeight = full.ThumbnailHeight, Widths = Enumerable.Repeat(full.Widths[0], tail.Count).ToArray(), Extent = full.Extent }];
             _columns = _sheetRows.FirstOrDefault()?.Count ?? 1;
             _sheetVersion++;
             Rows.Clear();
@@ -221,12 +229,6 @@ public partial class MainWindow
             VisualChildren<Button>(Gallery).FirstOrDefault(button => ReferenceEquals(button.DataContext, tile))?.Focus();
         }, DispatcherPriority.Loaded);
     }
-    private void QueueThumbnailReflow()
-    {
-        if (_aspectReflowQueued) return;
-        _aspectReflowQueued = true;
-        Dispatcher.BeginInvoke(() => { _aspectReflowQueued = false; if (!_closing) ArrangeRows(true); }, DispatcherPriority.ContextIdle);
-    }
     private void GalleryScrollToTop()
     {
         Dispatcher.BeginInvoke(() => { VisualChildren<ScrollViewer>(Gallery).FirstOrDefault()?.ScrollToTop(); VisualChildren<ScrollViewer>(MetadataList).FirstOrDefault()?.ScrollToTop(); }, DispatcherPriority.Loaded);
@@ -237,50 +239,52 @@ public partial class MainWindow
     {
         GridViewButton.SetResourceReference(BackgroundProperty, _listMode ? "SurfaceBrush" : "TintBrush");
         ListViewButton.SetResourceReference(BackgroundProperty, _listMode ? "TintBrush" : "SurfaceBrush");
+        GridViewButton.SetResourceReference(ForegroundProperty, _listMode ? "MutedBrush" : "AccentTextBrush");
+        ListViewButton.SetResourceReference(ForegroundProperty, _listMode ? "AccentTextBrush" : "MutedBrush");
     }
-    private void WindowSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); ArrangeRows(); ArrangePeopleRows(); }
+    private void WindowSizeChanged(object sender, SizeChangedEventArgs e) { UpdateSearchMode(); ApplyResponsiveLayout(); ArrangeRows(); ArrangePeopleRows(); }
     private void GallerySizeChanged(object sender, SizeChangedEventArgs e) => Dispatcher.BeginInvoke(() => ArrangeRows(), DispatcherPriority.Loaded);
     private void ResultsSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); ArrangeRows(); }
+    // Wide windows dock the preview beside the gallery. Below 1200 it slides over the results as a
+    // sheet, so the gallery keeps its scroll position underneath.
     private void ApplyResponsiveLayout()
     {
         if (!_uiReady) return;
         var hasPreview = _selectedResult is not null || _playbackSmoke;
         var compact = ActualWidth < 1200;
-        var detailOnly = compact && hasPreview;
-        if (detailOnly && !_compactPreview)
-            _returnAnchor = GetGalleryAnchor();
-        var restore = _compactPreview && !detailOnly; _compactPreview = detailOnly;
-        LibraryResultsPanel.Visibility = detailOnly ? Visibility.Collapsed : Visibility.Visible;
-        GalleryColumn.Width = detailOnly ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        var sheet = compact && hasPreview;
+
+        LibraryResultsPanel.Visibility = Visibility.Visible;
+        GalleryColumn.Width = new GridLength(1, GridUnitType.Star);
         PreviewPanel.Visibility = hasPreview ? Visibility.Visible : Visibility.Collapsed;
         PreviewColumn.MinWidth = hasPreview && !compact ? 300 : 0;
         PreviewColumn.MaxWidth = hasPreview && !compact ? 480 : double.PositiveInfinity;
-        if (!_resizingInspector || compact) PreviewColumn.Width = !hasPreview ? new GridLength(0) : compact ? new GridLength(1, GridUnitType.Star) : new GridLength(_inspectorWidth);
+        if (!_resizingInspector || compact) PreviewColumn.Width = !hasPreview || compact ? new GridLength(0) : new GridLength(_inspectorWidth);
         SplitterColumn.Width = hasPreview && !compact ? new GridLength(16) : new GridLength(0);
         PreviewSplitter.Visibility = hasPreview && !compact ? Visibility.Visible : Visibility.Collapsed;
-        PreviewBackButton.Visibility = detailOnly ? Visibility.Visible : Visibility.Collapsed;
-        SearchHeadingRow.Visibility = detailOnly ? Visibility.Collapsed : Visibility.Visible;
-        PaginationBar.Visibility = detailOnly || _status.FileCount == 0 ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetColumn(PreviewPanel, sheet ? 0 : 2); Grid.SetColumnSpan(PreviewPanel, sheet ? 3 : 1);
+        PreviewPanel.HorizontalAlignment = sheet ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
+        PreviewPanel.Width = sheet ? Math.Max(280, Math.Min(440, ResultsArea.ActualWidth - 24)) : double.NaN;
+        PreviewPanel.Effect = sheet ? new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 32, ShadowDepth = 8, Direction = 270, Opacity = _dark ? .5 : .2 } : null;
+        PreviewScrim.Visibility = sheet ? Visibility.Visible : Visibility.Collapsed;
+        PreviewBackButton.Visibility = Visibility.Collapsed;
+        SearchHeadingRow.Visibility = Visibility.Visible;
+        PaginationBar.Visibility = _status.FileCount == 0 ? Visibility.Collapsed : Visibility.Visible;
         var timedMedia = _preview?.Kind is FileKind.Video or FileKind.Audio;
         var mediaHeight = timedMedia
-            ? Math.Min(ActualHeight < 650 ? 104 : ActualHeight < 820 ? 180 : 240, Math.Max(64, ResultsArea.ActualHeight - 260))
-            : Math.Min(ActualHeight < 650 ? 112 : 210, Math.Max(40, ResultsArea.ActualHeight - 192));
+            ? Math.Min(ActualHeight < 650 ? 120 : ActualHeight < 820 ? 190 : 240, Math.Max(64, ResultsArea.ActualHeight - 260))
+            : Math.Min(ActualHeight < 650 ? 130 : 240, Math.Max(40, ResultsArea.ActualHeight - 192));
         PreviewMediaRow.Height = new GridLength(_preview?.Kind == FileKind.Document && PreviewImage.Source is null ? 0 : mediaHeight);
-        MomentsHeading.Margin = timedMedia && ActualHeight < 820 ? new Thickness(0, 8, 0, 8) : new Thickness(0, 16, 0, 12);
+        MomentsHeading.Margin = timedMedia && ActualHeight < 820 ? new Thickness(0, 10, 0, 6) : new Thickness(0, 16, 0, 8);
+        // A person opens as its own page at every width.
         PersonInspector.Visibility = _personInspectorOpen ? Visibility.Visible : Visibility.Collapsed;
-        PersonInspectorColumn.Width = !_personInspectorOpen ? new GridLength(0) : compact ? new GridLength(1, GridUnitType.Star) : new GridLength(340);
-        PeopleGalleryColumn.Width = _personInspectorOpen && compact ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
-        PeopleResultsPanel.Visibility = _personInspectorOpen && compact ? Visibility.Collapsed : Visibility.Visible;
-        PersonBackButton.Visibility = _personInspectorOpen && compact ? Visibility.Visible : Visibility.Collapsed;
-        PersonInspector.Margin = new Thickness(_personInspectorOpen && !compact ? 12 : 0, 0, 0, 0);
-        foreach (var button in new[] { SearchNav, PeopleNav, FoldersNav, PrepareNav }) { button.MinHeight = 32; button.Padding = new Thickness(10, 6, 10, 6); }
-        DriveLocation.Visibility = ActualHeight < 650 ? Visibility.Collapsed : Visibility.Visible;
-        PortableHint.Padding = ActualHeight < 650 ? new Thickness(10, 8, 8, 8) : new Thickness(10, 12, 8, 10);
+        PersonInspectorColumn.Width = _personInspectorOpen ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        PeopleGalleryColumn.Width = _personInspectorOpen ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        PeopleResultsPanel.Visibility = _personInspectorOpen ? Visibility.Collapsed : Visibility.Visible;
+        PersonBackButton.Visibility = _personInspectorOpen ? Visibility.Visible : Visibility.Collapsed;
         EmptyIcon.Visibility = ActualHeight < 650 ? Visibility.Collapsed : Visibility.Visible;
-        EmptyTitle.FontSize = ActualHeight < 650 ? 20 : 22;
+        EmptyTitle.FontSize = ActualHeight < 650 ? 18 : 20;
         UpdateViewButtons();
-        if (restore)
-            Dispatcher.BeginInvoke(() => { ArrangeRows(); ScrollGalleryToAnchor(_returnAnchor); }, DispatcherPriority.Loaded);
     }
     private void PreviewResizeStarted(object sender, DragStartedEventArgs e) => _resizingInspector = true;
     private void PreviewResized(object sender, DragCompletedEventArgs e) { _inspectorWidth = Math.Clamp(PreviewColumn.ActualWidth, 300, 480); _resizingInspector = false; ApplyResponsiveLayout(); ArrangeRows(true); }
@@ -305,19 +309,29 @@ public partial class MainWindow
         FolderFilter.SelectedItem = FolderFilter.Items.OfType<FolderChoice>().FirstOrDefault(f => f.Path == folder.RelativePath);
         _initialized = initialized; await SearchAsync(true);
     }
+    private async void AllFoldersClick(object sender, RoutedEventArgs e)
+    {
+        if (FolderFilter.SelectedIndex <= 0) return;
+        FolderFilter.SelectedIndex = 0;
+        if (!_initialized) await SearchAsync(true);
+    }
+    // Named people first; prepared face groups that still need a name follow.
     private void RefreshPeopleGallery()
     {
         _personTiles.Clear();
-        _personTiles.AddRange(_people.Select(p => new PersonTile { Person = p, IsSelected = p.Id == _editingPerson?.Id }));
+        _personTiles.AddRange(_people.OrderByDescending(p => p.Confirmed).Select(p => new PersonTile { Person = p, IsSelected = p.Id == _editingPerson?.Id }));
         _peopleRowsDirty = true;
         ArrangePeopleRows(true);
+        HomePeopleList.ItemsSource = _people.Where(p => p.Confirmed).Take(8).Select(p => new PersonTile { Person = p }).ToArray();
+        HomePeopleHeader.Visibility = HomePeopleList.Visibility = _people.Any(p => p.Confirmed) ? Visibility.Visible : Visibility.Collapsed;
+        BuildSuggestions();
     }
     private void PeopleSizeChanged(object sender, SizeChangedEventArgs e) => ArrangePeopleRows();
     private void ArrangePeopleRows(bool force = false)
     {
         if (!_uiReady || PeopleResultsPanel.Visibility != Visibility.Visible || PeopleGallery.ActualWidth < 1) return;
         var width = Math.Max(120, PeopleGallery.ActualWidth - 24);
-        var columns = Math.Max(1, (int)((width + 12) / 176));
+        var columns = Math.Max(1, (int)((width + 12) / 160));
         var tileWidth = Math.Floor((width - (columns - 1) * 12) / columns);
         foreach (var tile in _personTiles) tile.TileWidth = tileWidth;
         if (!force && !_peopleRowsDirty && _peopleColumns == columns) return;
@@ -384,7 +398,8 @@ public partial class MainWindow
             var state = await player.GetStateAsync();
             if (!ReferenceEquals(player, _player) || !ReferenceEquals(selected, _selectedResult)) return;
             PreviewTime.Text = $"{FormatTime(state.PositionMs)} / {FormatTime(state.DurationMs)}";
-            PlayPauseButton.Content = state.Playing ? "Pause" : "Play";
+            PlayPauseButton.Content = state.Playing ? "" : "";
+            if (state.DurationMs > 0 && state.DurationMs != _markedDuration) PlaceMomentMarkers(state.DurationMs);
             AutomationProperties.SetName(PlayPauseButton, state.Playing ? "Pause playback" : "Play playback");
             PlaybackSeek.Maximum = Math.Max(1, state.DurationMs);
             if (!_seeking) PlaybackSeek.Value = state.PositionMs;
@@ -392,6 +407,27 @@ public partial class MainWindow
         }
         catch (Exception) { StopPlaybackPolling(); }
         finally { _pollingPlayback = false; }
+    }
+    private long _markedDuration;
+    private IReadOnlyList<SearchMoment> _markerMoments = [];
+    // Matching moments as ticks on the timeline; each tick opens that moment.
+    private void PlaceMomentMarkers(long durationMs)
+    {
+        _markedDuration = durationMs; MomentMarkers.Children.Clear();
+        var width = MomentMarkers.ActualWidth;
+        if (width <= 0) return;
+        foreach (var moment in _markerMoments)
+        {
+            if ((moment.PersonEvidence.FirstOrDefault()?.StartMs ?? moment.StartMs) is not long at || at < 0 || at > durationMs) continue;
+            var marker = new Button { Width = 6, Height = 16, MinHeight = 0, Padding = new Thickness(0), BorderThickness = new Thickness(1.5), Tag = moment, ToolTip = $"{moment.Label} · {FormatTime(at)}", Cursor = Cursors.Hand };
+            marker.Style = (Style)FindResource("TimelineMarker");
+            marker.SetResourceReference(BackgroundProperty, moment.PersonEvidence.Count > 0 ? "VideoInkBrush" : "AccentBrush");
+            marker.SetResourceReference(BorderBrushProperty, "SurfaceBrush");
+            AutomationProperties.SetName(marker, $"Jump to {FormatTime(at)}, {moment.Label}");
+            marker.Click += MomentClick;
+            Canvas.SetLeft(marker, width * at / durationMs - 3);
+            MomentMarkers.Children.Add(marker);
+        }
     }
     private void SeekStarted(object sender, MouseButtonEventArgs e) => _seeking = true;
     private async void SeekReleased(object sender, MouseButtonEventArgs e) { _seeking = false; await SeekToSliderAsync(); }

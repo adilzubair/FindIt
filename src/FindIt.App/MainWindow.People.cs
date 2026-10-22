@@ -76,12 +76,71 @@ public partial class MainWindow
         _suppressPersonSelection = true;
         try { PeopleList.SelectedItem = person is null ? null : _people.FirstOrDefault(p => p.Id == person.Id); }
         finally { _suppressPersonSelection = false; }
-        PersonHeading.Text = person is null ? "Add a person" : "Edit person";
-        PersonName.Text = person?.Name ?? ""; PersonAliases.Text = person is null ? "" : string.Join(", ", person.Aliases);
+        var named = person?.Confirmed == true;
+        PersonHeading.Text = person is null ? "Add a person" : named ? person.Name : "Who is this?";
+        PersonInitials.Text = person is null ? "+" : new PersonTile { Person = person }.Initials;
+        PersonAvatar.ImageSource = null;
+        if (person?.Portrait is { } portrait) _ = FillAvatarAsync(person.Id, portrait);
+        PersonName.Text = person is null || !named ? "" : person.Name; PersonAliases.Text = person is null ? "" : string.Join(", ", person.Aliases);
         _references = []; ReferenceCount.Text = "No new photos selected"; ReferenceCount.ToolTip = null;
-        PersonObservations.Text = person is null ? "" : $"{person.ObservationCount:N0} face observation{(person.ObservationCount == 1 ? "" : "s")}. Review uncertain matches before relying on them.";
+        PersonObservations.Text = person is null ? "Choose clear photos of their face, then save. FindIt looks for them the next time this drive is prepared."
+            : named ? $"Seen {person.ObservationCount:N0} time{(person.ObservationCount == 1 ? "" : "s")}{(person.Aliases.Count > 0 ? " · also known as " + string.Join(", ", person.Aliases) : "")}"
+            : $"A group of {person.ObservationCount:N0} similar face{(person.ObservationCount == 1 ? "" : "s")} found while preparing. Add a name to search for them.";
+        SearchPersonButton.Content = named ? $"Find {person!.Name}" : "Find this person";
         SearchPersonButton.IsEnabled = ReviewFacesButton.IsEnabled = MergePersonButton.IsEnabled = person is not null;
+        PersonReviewCard.Visibility = person is null ? Visibility.Collapsed : Visibility.Visible;
         RememberPersonDraft(); OpenPersonInspector();
+        _ = LoadPersonSuggestionsAsync(person);
+    }
+
+    private async Task FillAvatarAsync(Guid personId, BlobReference portrait)
+    {
+        try { var image = await _thumbnails.ReadAsync(portrait, CancellationToken.None); if (_editingPerson?.Id == personId) PersonAvatar.ImageSource = image; }
+        catch (Exception) { /* A missing portrait keeps the initials. */ }
+    }
+
+    private int _suggestionVersion;
+    private bool _savingSuggestion;
+    // Up to twelve uncertain faces, best quality first, for a quick yes or no without the full review.
+    private async Task LoadPersonSuggestionsAsync(PersonRecord? person)
+    {
+        var version = ++_suggestionVersion;
+        PersonSuggestionList.ItemsSource = null; PersonSuggestionEmpty.Visibility = Visibility.Collapsed;
+        if (_backend is null || person is null) return;
+        try
+        {
+            var observations = await _backend.GetPersonObservationsAsync(person.Id);
+            if (version != _suggestionVersion) return;
+            var label = person.Confirmed ? person.Name : "this person";
+            var suggestions = observations.Where(o => !o.Confirmed && !o.Rejected).OrderByDescending(o => o.Quality).Take(12).Select(o => new PersonSuggestion(o, label)).ToArray();
+            PersonSuggestionList.ItemsSource = suggestions;
+            PersonSuggestionEmpty.Visibility = suggestions.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            PersonReviewHint.Text = suggestions.Length == 0 ? "Nothing waiting. Use Review all matches to change earlier answers." : $"Is this {label}? Your answers stay on this drive and make person searches more reliable.";
+            foreach (var suggestion in suggestions)
+            {
+                var image = await _thumbnails.ReadAsync(suggestion.Observation.Thumbnail, CancellationToken.None);
+                if (version != _suggestionVersion) return;
+                suggestion.Thumbnail = image;
+            }
+        }
+        catch (Exception ex) { if (version == _suggestionVersion) Notice($"Could not load suggested matches: {ex.Message}"); }
+    }
+
+    private async void ConfirmSuggestionClick(object sender, RoutedEventArgs e) => await DecideSuggestionAsync(sender, SuggestionDecision.Confirmed);
+    private async void RejectSuggestionClick(object sender, RoutedEventArgs e) => await DecideSuggestionAsync(sender, SuggestionDecision.Rejected);
+    private async Task DecideSuggestionAsync(object sender, SuggestionDecision decision)
+    {
+        if (_backend is null || _editingPerson is not { } person || _savingSuggestion || _savingPerson || (sender as FrameworkElement)?.Tag is not PersonSuggestion suggestion || suggestion.Decision == decision || !PersonEditorMatchesArchive()) return;
+        _savingSuggestion = true; PersonSuggestionList.IsEnabled = false;
+        try
+        {
+            var id = suggestion.Observation.Id;
+            await _backend.SavePersonAsync(new() { PersonId = person.Id, Name = person.Name, Aliases = person.Aliases,
+                ConfirmObservationIds = decision == SuggestionDecision.Confirmed ? [id] : [], RejectObservationIds = decision == SuggestionDecision.Rejected ? [id] : [] });
+            suggestion.Decision = decision;
+        }
+        catch (Exception ex) { Notice($"Could not save that answer: {ex.Message}"); }
+        finally { _savingSuggestion = false; PersonSuggestionList.IsEnabled = true; }
     }
 
     private void AddPersonClick(object sender, RoutedEventArgs e)

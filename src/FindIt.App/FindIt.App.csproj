@@ -11,8 +11,6 @@
   <ItemGroup>
     <Resource Include="Assets/FindIt.ico" />
     <Resource Include="Assets/FindIt.png" />
-    <Resource Include="Assets/Fonts/*.ttf" />
-    <Content Include="Assets/Fonts/*LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="../FindIt.Shared/FindIt.Shared.csproj" />
     <ProjectReference Include="../FindIt.Client/FindIt.Client.csproj" />
   </ItemGroup>

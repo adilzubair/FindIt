@@ -48,19 +48,10 @@ public partial class MainWindow
         Dispatcher.BeginInvoke(new Action(() => { if (_appearanceSubscribed) ApplyAppearance(); }));
     }
 
-    private void ThemeClick(object sender, RoutedEventArgs e)
+    private bool _synchronizingAppearance;
+    private void ThemeOptionChecked(object sender, RoutedEventArgs e)
     {
-        if (ThemeButton.ContextMenu is not { } menu) return;
-        UpdateNativeFrameAppearance();
-        SynchronizeAppearanceMenu();
-        menu.PlacementTarget = ThemeButton;
-        menu.Placement = PlacementMode.Right;
-        menu.IsOpen = true;
-    }
-
-    private void ThemeMenuClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string mode } || !Enum.TryParse<AppearanceMode>(mode, out var choice)) return;
+        if (_synchronizingAppearance || sender is not RadioButton { Tag: string mode } || !Enum.TryParse<AppearanceMode>(mode, out var choice) || choice == _appearanceMode) return;
         _appearanceMode = choice;
         ApplyAppearance();
     }
@@ -87,13 +78,18 @@ public partial class MainWindow
         var colors = _dark
             ? new Dictionary<string, string>
             {
-                ["CanvasBrush"] = "#18191C", ["SurfaceBrush"] = "#1F2023", ["SidebarBrush"] = "#1F2023",
-                ["InkBrush"] = "#F8F9FB", ["MutedBrush"] = "#B5B6B8", ["BorderBrush"] = "#2B2C2F", ["CheckBorderBrush"] = "#717681",
-                ["AccentBrush"] = "#3297FF", ["AccentButtonBrush"] = "#3297FF", ["AccentButtonForegroundBrush"] = "#091C30",
-                ["AccentTextBrush"] = "#69B3FF", ["FocusBrush"] = "#3297FF", ["TintBrush"] = "#1D3249",
-                ["HoverBrush"] = "#232427", ["PreviewBrush"] = "#202125", ["ReadyBrush"] = "#7ECBB6",
-                ["WarningBrush"] = "#EDBE71", ["WarningTintBrush"] = "#3A3022", ["ErrorBrush"] = "#F59C9C",
-                ["ErrorTintBrush"] = "#40272B", ["ShadowBrush"] = "#66000000",
+                ["CanvasBrush"] = "#202020", ["LayerBrush"] = "#272727", ["SurfaceBrush"] = "#2D2D2D", ["SidebarBrush"] = "#202020",
+                ["InkBrush"] = "#FFFFFF", ["MutedBrush"] = "#CFCFCF", ["SubtleBrush"] = "#ABABAB", ["BorderBrush"] = "#3A3A3A",
+                ["StrongBorderBrush"] = "#555555", ["CheckBorderBrush"] = "#9A9A9A",
+                ["AccentBrush"] = "#60CDFF", ["AccentButtonBrush"] = "#60CDFF", ["AccentButtonForegroundBrush"] = "#000000",
+                ["AccentTextBrush"] = "#7FD6FF", ["FocusBrush"] = "#FFFFFF", ["TintBrush"] = "#1D3A4A",
+                ["HoverBrush"] = "#323232", ["SelectedFillBrush"] = "#363636", ["PreviewBrush"] = "#333333", ["PaperBrush"] = "#323232",
+                ["TrackBrush"] = "#505050", ["ScrimBrush"] = "#8C000000",
+                ["ReadyBrush"] = "#6CCB5F", ["ReadyTintBrush"] = "#1F3A1D",
+                ["WarningBrush"] = "#FCE100", ["WarningTintBrush"] = "#433519", ["ErrorBrush"] = "#FF99A4",
+                ["ErrorTintBrush"] = "#442726", ["ShadowBrush"] = "#66000000",
+                ["PhotoTintBrush"] = "#173A35", ["PhotoInkBrush"] = "#6FD3C2", ["VideoTintBrush"] = "#2E2547", ["VideoInkBrush"] = "#B9A3F0",
+                ["DocumentTintBrush"] = "#1D3047", ["DocumentInkBrush"] = "#8DC1F5", ["AudioTintBrush"] = "#43233A", ["AudioInkBrush"] = "#F0A0CF",
                 ["IconFolderBackBrush"] = "#BD8B37", ["IconFolderFrontBrush"] = "#EBC573", ["IconFolderDetailBrush"] = "#FFF4D9",
                 ["IconLibraryBackBrush"] = "#316DAA", ["IconLibraryFrontBrush"] = "#80BAFA", ["IconLibraryDetailBrush"] = "#EDF6FF",
                 ["IconPeopleBackBrush"] = "#7D65AF", ["IconPeopleFrontBrush"] = "#C2A4EB", ["IconPeopleDetailBrush"] = "#F8F0FF",
@@ -105,13 +101,18 @@ public partial class MainWindow
             }
             : new Dictionary<string, string>
             {
-                ["CanvasBrush"] = "#FFFFFF", ["SurfaceBrush"] = "#FFFFFF", ["SidebarBrush"] = "#F9F9F9",
-                ["InkBrush"] = "#2C2F32", ["MutedBrush"] = "#6B6D70", ["BorderBrush"] = "#E6E6E6", ["CheckBorderBrush"] = "#8C939D",
-                ["AccentBrush"] = "#0072EF", ["AccentButtonBrush"] = "#0072EF", ["AccentButtonForegroundBrush"] = "#FFFFFF",
-                ["AccentTextBrush"] = "#0067DB", ["FocusBrush"] = "#0072EF", ["TintBrush"] = "#E5F1FD",
-                ["HoverBrush"] = "#F4F5F5", ["PreviewBrush"] = "#F6F7F8", ["ReadyBrush"] = "#177565",
-                ["WarningBrush"] = "#945A0D", ["WarningTintBrush"] = "#FFF3DB", ["ErrorBrush"] = "#B53838",
-                ["ErrorTintBrush"] = "#FCECEC", ["ShadowBrush"] = "#24000000",
+                ["CanvasBrush"] = "#F3F3F3", ["LayerBrush"] = "#F9F9F9", ["SurfaceBrush"] = "#FFFFFF", ["SidebarBrush"] = "#F3F3F3",
+                ["InkBrush"] = "#1B1B1B", ["MutedBrush"] = "#5C5C5C", ["SubtleBrush"] = "#6B6B6B", ["BorderBrush"] = "#E5E5E5",
+                ["StrongBorderBrush"] = "#C9C9C9", ["CheckBorderBrush"] = "#8A8A8A",
+                ["AccentBrush"] = "#005FB8", ["AccentButtonBrush"] = "#005FB8", ["AccentButtonForegroundBrush"] = "#FFFFFF",
+                ["AccentTextBrush"] = "#005FB8", ["FocusBrush"] = "#1B1B1B", ["TintBrush"] = "#E6EFF8",
+                ["HoverBrush"] = "#F0F0F0", ["SelectedFillBrush"] = "#EAEAEA", ["PreviewBrush"] = "#EDEDED", ["PaperBrush"] = "#FFFFFF",
+                ["TrackBrush"] = "#D6D6D6", ["ScrimBrush"] = "#52000000",
+                ["ReadyBrush"] = "#0F7B0F", ["ReadyTintBrush"] = "#DFF6DD",
+                ["WarningBrush"] = "#9D5D00", ["WarningTintBrush"] = "#FFF4CE", ["ErrorBrush"] = "#C42B1C",
+                ["ErrorTintBrush"] = "#FDE7E9", ["ShadowBrush"] = "#24000000",
+                ["PhotoTintBrush"] = "#DDF3EF", ["PhotoInkBrush"] = "#0B6A5B", ["VideoTintBrush"] = "#ECE6F7", ["VideoInkBrush"] = "#5B3F9E",
+                ["DocumentTintBrush"] = "#E3EDF9", ["DocumentInkBrush"] = "#185ABD", ["AudioTintBrush"] = "#F7E4EF", ["AudioInkBrush"] = "#9B2C6E",
                 ["IconFolderBackBrush"] = "#BA801F", ["IconFolderFrontBrush"] = "#F0BE55", ["IconFolderDetailBrush"] = "#FFF0C7",
                 ["IconLibraryBackBrush"] = "#2868BA", ["IconLibraryFrontBrush"] = "#69A4ED", ["IconLibraryDetailBrush"] = "#EAF4FF",
                 ["IconPeopleBackBrush"] = "#7358AF", ["IconPeopleFrontBrush"] = "#AB8DDD", ["IconPeopleDetailBrush"] = "#F4EDFF",
@@ -130,13 +131,17 @@ public partial class MainWindow
         if (SystemParameters.HighContrast)
         {
             var resources = Application.Current.Resources;
-            foreach (var key in new[] { "CanvasBrush", "SurfaceBrush", "SidebarBrush", "PreviewBrush", "WarningTintBrush", "ErrorTintBrush" }) resources[key] = SystemColors.WindowBrush;
-            foreach (var key in new[] { "InkBrush", "MutedBrush", "ReadyBrush", "WarningBrush", "ErrorBrush", "BorderBrush", "CheckBorderBrush" }) resources[key] = SystemColors.WindowTextBrush;
+            foreach (var key in new[] { "CanvasBrush", "LayerBrush", "SurfaceBrush", "SidebarBrush", "PreviewBrush", "PaperBrush", "WarningTintBrush", "ErrorTintBrush", "ReadyTintBrush",
+                         "PhotoTintBrush", "VideoTintBrush", "DocumentTintBrush", "AudioTintBrush" }) resources[key] = SystemColors.WindowBrush;
+            foreach (var key in new[] { "InkBrush", "MutedBrush", "SubtleBrush", "ReadyBrush", "WarningBrush", "ErrorBrush", "BorderBrush", "StrongBorderBrush", "CheckBorderBrush", "TrackBrush",
+                         "PhotoInkBrush", "VideoInkBrush", "DocumentInkBrush", "AudioInkBrush" }) resources[key] = SystemColors.WindowTextBrush;
             foreach (var key in new[] { "AccentBrush", "AccentTextBrush", "FocusBrush" }) resources[key] = SystemColors.HotTrackBrush;
             resources["AccentButtonBrush"] = SystemColors.HighlightBrush;
             resources["AccentButtonForegroundBrush"] = SystemColors.HighlightTextBrush;
             resources["TintBrush"] = SystemColors.ControlBrush;
             resources["HoverBrush"] = SystemColors.ControlBrush;
+            resources["SelectedFillBrush"] = SystemColors.HighlightBrush;
+            resources["ScrimBrush"] = Brushes.Transparent;
             // The icon families share system colors in high contrast. Their shape
             // and layers remain meaningful without relying on decorative hues.
             foreach (var family in new[] { "Folder", "Library", "People", "Photo", "Video", "Document", "Audio", "Utility" })
@@ -152,9 +157,10 @@ public partial class MainWindow
 
     private void SynchronizeAppearanceMenu()
     {
-        if (ThemeButton?.ContextMenu is not { } menu) return;
-        foreach (var item in menu.Items.OfType<MenuItem>()) item.IsChecked = item.Tag?.ToString() == _appearanceMode.ToString();
-        ThemeButton.ToolTip = $"Appearance: {_appearanceMode}";
+        if (ThemeSystemOption is null) return;
+        _synchronizingAppearance = true;
+        try { foreach (var option in new[] { ThemeSystemOption, ThemeLightOption, ThemeDarkOption }) option.IsChecked = option.Tag?.ToString() == _appearanceMode.ToString(); }
+        finally { _synchronizingAppearance = false; }
     }
 
     private void UpdateNativeFrameAppearance()

@@ -1,5 +1,0 @@
-IBM Plex Sans — unmodified upstream Regular, SemiBold and Bold TTF files.
-Downloaded 2026-10-21 from the official IBM/plex repository:
-https://github.com/IBM/plex/tree/master/packages/plex-sans/fonts/complete/ttf
-License: SIL Open Font License 1.1; see OFL-LICENSE.txt.
-Fonts are embedded WPF resources. No installation or network access is required.

@@ -67,7 +67,6 @@ try {
         New-Item -ItemType Directory -Force $taskLicenses | Out-Null
         Get-ChildItem runtime/licenses | Copy-Item -Destination $taskLicenses -Recurse -Force
     }
-    Copy-Item -LiteralPath src/FindIt.App/Assets/Fonts/OFL-LICENSE.txt -Destination (Join-Path $taskLicenses 'IBM-Plex-Sans-OFL.txt') -Force
     if ($SigningThumbprint) {
         $taskCertificate = Get-Item "Cert:/CurrentUser/My/$SigningThumbprint"
         $taskOwnedBinaries = @((Join-Path $taskOutput 'FindIt.exe'), (Join-Path $taskApp 'runtime/native/findit_native.dll')) + @(Get-ChildItem -LiteralPath $taskApp -File | Where-Object { $_.Name -like 'FindIt.*' -and $_.Extension -in @('.exe','.dll') } | Select-Object -ExpandProperty FullName)
