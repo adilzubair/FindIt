@@ -168,7 +168,13 @@ public class ScaleBenchmarkTests
         Assert.AreEqual(finished.Sha256,ScaleArtifacts.Hash(Path.Combine(directory,"index.usearch")));
         using var complete=NativeVectorIndex.Open(Path.Combine(directory,"index.usearch"));
         Assert.AreEqual(768L,complete.Count);
-        for(ulong row=0;row<768;row+=37)Assert.AreEqual(row,complete.Search(ScaleAlgorithms.Vector(state.Seed,row,state.Distribution),1)[0].Key);
+        // Resumption must preserve every stored vector. Parallel graph insertion
+        // does not guarantee perfect top-one ANN recall, even for corpus queries.
+        for(ulong row=0;row<768;row++)
+        {
+            Assert.IsTrue(complete.Contains(row));
+            CollectionAssert.AreEqual(ScaleAlgorithms.Vector(state.Seed,row,state.Distribution),complete.Get(row));
+        }
         Assert.IsFalse(File.Exists(pointer));
         Assert.AreEqual(0,Directory.GetFiles(directory,"native-checkpoint-v1-*.usearch").Length);
         int callbacks=0;var reused=ScaleNativeBuilder.Build(directory,state,CancellationToken.None,128,_=>callbacks++,buildConcurrency:4);
