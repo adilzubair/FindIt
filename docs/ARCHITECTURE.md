@@ -6,7 +6,7 @@
 
 `FindIt.Worker.exe` has reader, preparer, and preview roles. JSON-RPC messages are UTF-8 with a four-byte little-endian length prefix and a bounded frame size. Responses carry request IDs; preparation progress has the originating request ID. Cancellation is sent only after the request has entered the stream. EOF cancels work and closes models/indexes. Native diagnostics use stderr so they cannot corrupt the protocol.
 
-The reader opens the text backbone on demand, keeps compatible query encoding resident, and maps immutable vector data. The preparer loads media/face/OCR dependencies as needed. Vulkan is eligible only after a timed CPU/GPU numerical comparison and meaningful measured speedup; CPU remains the fallback. The preview worker alone hosts LibVLC. Native failures are contained by process boundaries.
+When the library can be searched by meaning, the reader starts loading the text backbone in the background as soon as it opens, so the first query does not wait for a slow drive. It keeps compatible query encoding resident and maps immutable vector data. Each model is SHA-256 verified before it is loaded; a successful hash is remembered in `%LOCALAPPDATA%\FindIt\verification` for that exact file identity (volume, file index, size, creation and write time), and any change verifies the file again. The preparer loads media/face/OCR dependencies as needed. Vulkan is eligible only after a timed CPU/GPU numerical comparison and meaningful measured speedup; CPU remains the fallback. The preview worker alone hosts LibVLC. Native failures are contained by process boundaries.
 
 ## Drive layout
 

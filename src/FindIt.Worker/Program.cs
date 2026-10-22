@@ -21,6 +21,7 @@ internal static class Program
         {
             await using var service = new ArchiveService(root, RuntimeFactory.CreateEmbeddingProvider(root), RuntimeFactory.CreateContentProcessor(root));
             using var playback = role == "preview" ? new PlaybackHost(root) : null;
+            if (role == "reader") service.StartSemanticWarmUp();
             await RunAsync(service, role, playback).ConfigureAwait(false);
             return 0;
         }
