@@ -414,14 +414,23 @@ public partial class MainWindow : Window
     private async void TileLoaded(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not ResultTile tile || tile.Thumbnail is not null || _thumbnailRequests.ContainsKey(tile)) return;
+        await LoadThumbnailAsync(tile, VisualTreeHelper.GetDpi((Visual)sender));
+    }
+    // A tile resized in place keeps its image; ask again so a larger box gets enough pixels.
+    private async void RefreshGrownThumbnail(ResultTile tile)
+    {
+        if (tile.Thumbnail is null || _thumbnailRequests.ContainsKey(tile)) return;
+        await LoadThumbnailAsync(tile, VisualTreeHelper.GetDpi(this));
+    }
+    private async Task LoadThumbnailAsync(ResultTile tile, DpiScale dpi)
+    {
         // Recent files on Home outlive searches, so only gallery tiles follow search cancellation.
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(RecentTiles.Contains(tile) ? CancellationToken.None : _searchCancellation?.Token ?? CancellationToken.None);
         _thumbnailRequests[tile] = cancellation;
         try
         {
-            var dpi = VisualTreeHelper.GetDpi((Visual)sender);
             var thumbnail = await _thumbnails.ReadAsync(tile.Result.Thumbnail, cancellation.Token, new Size(tile.TileWidth * dpi.DpiScaleX, tile.ThumbnailHeight * dpi.DpiScaleY));
-            if (!cancellation.IsCancellationRequested) tile.Thumbnail = thumbnail;
+            if (!cancellation.IsCancellationRequested && !ReferenceEquals(tile.Thumbnail, thumbnail)) tile.Thumbnail = thumbnail;
         }
         catch (OperationCanceledException) { }
         finally { if (_thumbnailRequests.TryGetValue(tile, out var active) && ReferenceEquals(active, cancellation)) _thumbnailRequests.Remove(tile); cancellation.Dispose(); }
@@ -562,8 +571,9 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!cancellation.IsCancellationRequested) { PreviewPlaceholder.Text = "Preview unavailable. Open the original file to view it."; PreviewPlaceholder.Visibility = Visibility.Visible; Notice($"Could not load preview: {ex.Message}"); } }
         if (cancellation.IsCancellationRequested) return;
+        // Docking the preview narrows the gallery; moving between files does not.
         ApplyResponsiveLayout();
-        ArrangeRows(true);
+        RequestArrangeRows();
     }
 
     private static async Task<BitmapSource?> LoadImageFileAsync(string? path, CancellationToken token)
@@ -671,7 +681,7 @@ public partial class MainWindow : Window
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { }
         if (position < _previewPlainText.Length) PreviewText.Inlines.Add(new System.Windows.Documents.Run(_previewPlainText[position..]));
     }
-    private void ClosePreview(bool restoreFocus = false) { _previewCancellation?.Cancel(); StopPlayback(); _preview = null; _selectedResult = null; MetadataList.SelectedItem = null; foreach (var tile in CurrentTiles) tile.IsSelected = false; ApplyResponsiveLayout(); ArrangeRows(true); if (restoreFocus) RestoreResultFocus(); }
+    private void ClosePreview(bool restoreFocus = false) { _previewCancellation?.Cancel(); StopPlayback(); _preview = null; _selectedResult = null; MetadataList.SelectedItem = null; foreach (var tile in CurrentTiles) tile.IsSelected = false; ApplyResponsiveLayout(); RequestArrangeRows(); if (restoreFocus) RestoreResultFocus(); }
     private void OpenOriginalClick(object sender, RoutedEventArgs e) => OpenOriginal();
     private void OpenOriginal()
     {

@@ -170,16 +170,25 @@ public partial class MainWindow
                 _sheetRows = [.. _sheetRows.Take(_sheetRows.Count - 1), tail with { ThumbnailHeight = full.ThumbnailHeight, Widths = Enumerable.Repeat(full.Widths[0], tail.Count).ToArray(), Extent = full.Extent }];
             _columns = _sheetRows.FirstOrDefault()?.Count ?? 1;
             _sheetVersion++;
-            Rows.Clear();
-            foreach (var row in _sheetRows)
+            // Same files on the same rows (most resize steps, density changes within a column
+            // count): resize in place. Rebuilding recreates every tile and reloads its thumbnail.
+            var sameRows = Rows.Count == _sheetRows.Count && Rows.Zip(_sheetRows).All(pair => pair.First.Tiles.Count == pair.Second.Count && pair.First.Tiles.SequenceEqual(CurrentTiles.Skip(pair.Second.Start).Take(pair.Second.Count)));
+            if (!sameRows) Rows.Clear();
+            for (var index = 0; index < _sheetRows.Count; index++)
             {
-                var tiles = CurrentTiles.Skip(row.Start).Take(row.Count).ToArray();
-                for (var i = 0; i < tiles.Length; i++) { tiles[i].TileWidth = row.Widths[i]; tiles[i].ThumbnailHeight = row.ThumbnailHeight; }
-                Rows.Add(new(tiles, row.Extent));
+                var row = _sheetRows[index];
+                var tiles = sameRows ? Rows[index].Tiles : CurrentTiles.Skip(row.Start).Take(row.Count).ToArray();
+                for (var i = 0; i < tiles.Count; i++)
+                {
+                    var grew = sameRows && (row.Widths[i] > tiles[i].TileWidth + .5 || row.ThumbnailHeight > tiles[i].ThumbnailHeight + .5);
+                    tiles[i].TileWidth = row.Widths[i]; tiles[i].ThumbnailHeight = row.ThumbnailHeight;
+                    if (grew) RefreshGrownThumbnail(tiles[i]);
+                }
+                if (sameRows) Rows[index].Extent = row.Extent; else Rows.Add(new(tiles, row.Extent));
             }
             if (scroll is not null && anchor > 0)
                 ScrollGalleryToAnchor(anchor);
-            if (focusedTile is not null) RestoreGalleryReflowFocus(focusedTile, focusedButton!, _sheetVersion);
+            if (focusedTile is not null && !sameRows) RestoreGalleryReflowFocus(focusedTile, focusedButton!, _sheetVersion);
         }
         finally { _arranging = false; }
     }
@@ -242,9 +251,18 @@ public partial class MainWindow
         GridViewButton.SetResourceReference(ForegroundProperty, _listMode ? "MutedBrush" : "AccentTextBrush");
         ListViewButton.SetResourceReference(ForegroundProperty, _listMode ? "AccentTextBrush" : "MutedBrush");
     }
-    private void WindowSizeChanged(object sender, SizeChangedEventArgs e) { UpdateSearchMode(); ApplyResponsiveLayout(); ArrangeRows(); ArrangePeopleRows(); }
-    private void GallerySizeChanged(object sender, SizeChangedEventArgs e) => Dispatcher.BeginInvoke(() => ArrangeRows(), DispatcherPriority.Loaded);
-    private void ResultsSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); ArrangeRows(); }
+    private void WindowSizeChanged(object sender, SizeChangedEventArgs e) { UpdateSearchMode(); ApplyResponsiveLayout(); RequestArrangeRows(); ArrangePeopleRows(); }
+    private void GallerySizeChanged(object sender, SizeChangedEventArgs e) => RequestArrangeRows();
+    private void ResultsSizeChanged(object sender, SizeChangedEventArgs e) { ApplyResponsiveLayout(); RequestArrangeRows(); }
+    // Window, results and gallery size changes arrive together on every resize step, before
+    // the gallery's viewport width is final. Reflow once per step, after layout.
+    private bool _arrangeRequested;
+    private void RequestArrangeRows()
+    {
+        if (_arrangeRequested) return;
+        _arrangeRequested = true;
+        Dispatcher.BeginInvoke(() => { _arrangeRequested = false; ArrangeRows(); }, DispatcherPriority.Loaded);
+    }
     // Wide windows dock the preview beside the gallery. Below 1200 it slides over the results as a
     // sheet, so the gallery keeps its scroll position underneath.
     private void ApplyResponsiveLayout()

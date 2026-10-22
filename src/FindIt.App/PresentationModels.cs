@@ -47,7 +47,15 @@ public sealed class ResultTile : INotifyPropertyChanged
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }
 
-public sealed record ResultRow(IReadOnlyList<ResultTile> Tiles, double Extent);
+/// <summary>A gallery row. Its extent changes in place, so a reflow that keeps the same tiles per row
+/// resizes the realized containers instead of recreating every tile.</summary>
+public sealed class ResultRow(IReadOnlyList<ResultTile> tiles, double extent) : INotifyPropertyChanged
+{
+    public IReadOnlyList<ResultTile> Tiles { get; } = tiles;
+    private double _extent = extent;
+    public double Extent { get => _extent; set { if (Math.Abs(value - _extent) < .001) return; _extent = value; PropertyChanged?.Invoke(this, new(nameof(Extent))); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
 
 /// <summary>Plain-language match explanations. Person matches stay qualified as possible.</summary>
 public static class MatchReason
