@@ -419,7 +419,8 @@ public partial class MainWindow : Window
         _thumbnailRequests[tile] = cancellation;
         try
         {
-            var thumbnail = await _thumbnails.ReadAsync(tile.Result.Thumbnail, cancellation.Token);
+            var dpi = VisualTreeHelper.GetDpi((Visual)sender);
+            var thumbnail = await _thumbnails.ReadAsync(tile.Result.Thumbnail, cancellation.Token, new Size(tile.TileWidth * dpi.DpiScaleX, tile.ThumbnailHeight * dpi.DpiScaleY));
             if (!cancellation.IsCancellationRequested) tile.Thumbnail = thumbnail;
         }
         catch (OperationCanceledException) { }
