@@ -22,6 +22,34 @@ public sealed partial class ArchiveService
     private long loadedVectorGeneration;
     private bool nativeIndexInitialized;
     private string indexNotice = "";
+    private readonly CancellationTokenSource warmUpCancellation = new();
+    private Task semanticWarmUp = Task.CompletedTask;
+    private readonly TaskCompletionSource firstSearchCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal Task SemanticWarmUp => semanticWarmUp;
+    internal TimeSpan WarmUpStartDelay { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Loads the query encoder in the background, so the first search by meaning does not
+    /// wait for the model to be verified and read from a slow drive. Searches share the
+    /// encoder's gate and simply wait for any remaining load.
+    /// </summary>
+    public void StartSemanticWarmUp() => semanticWarmUp = Task.Run(() => WarmUpSemanticAsync(warmUpCancellation.Token));
+
+    private async Task WarmUpSemanticAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var generation = await storage.RecoverAsync(cancellationToken);
+            if (generation is null || generation.VectorCount == 0 || !embeddings.Available || generation.EmbeddingFingerprint != embeddings.Fingerprint) return;
+            // Streaming the model saturates a USB drive. Let the window's first page read the
+            // catalog first (measured cold: 4.3 s slower otherwise), or start after a short wait.
+            await Task.WhenAny(firstSearchCompleted.Task, Task.Delay(WarmUpStartDelay, cancellationToken));
+            cancellationToken.ThrowIfCancellationRequested();
+            await embeddings.EmbedTextAsync("warm up", true, cancellationToken);
+        }
+        // A real search reports encoder failures with its keyword fallback.
+        catch (Exception error) when (error is not OutOfMemoryException) { }
+    }
 
     public async Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken = default)
     {
@@ -209,7 +237,7 @@ public sealed partial class ArchiveService
             searchSessions.Add(created);
             return response;
         }
-        finally { searchGate.Release(); }
+        finally { searchGate.Release(); firstSearchCompleted.TrySetResult(); }
     }
 
     private void EnsureVectorGeneration(long generationId)

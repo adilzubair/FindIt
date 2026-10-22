@@ -13,6 +13,27 @@ internal static class ResultPreview
     }
 }
 
+/// <summary>
+/// Decoded thumbnails cost several times their pixel bytes once WPF renders them, so a tile
+/// decodes only the pixels its cropped (UniformToFill) box displays.
+/// </summary>
+internal static class ThumbnailSizing
+{
+    internal const int Step = 64;
+    internal const int DefaultMaximumWidth = 440;
+
+    /// <summary>Smallest decode width that still covers a box of device pixels without upscaling.</summary>
+    public static int CoverWidth(int sourceWidth, int sourceHeight, double boxWidth, double boxHeight)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0) return DefaultMaximumWidth;
+        if (!double.IsFinite(boxWidth) || !double.IsFinite(boxHeight) || boxWidth <= 0 || boxHeight <= 0) return Math.Min(sourceWidth, DefaultMaximumWidth);
+        var needed = Math.Max(boxWidth, boxHeight * sourceWidth / sourceHeight);
+        // Whole steps let small reflows reuse the cached image instead of decoding again.
+        var stepped = (int)Math.Min(int.MaxValue - Step, Math.Ceiling(needed / Step) * Step);
+        return Math.Clamp(stepped, 1, sourceWidth);
+    }
+}
+
 internal static class GalleryLayout
 {
     internal const double Gap = 12;

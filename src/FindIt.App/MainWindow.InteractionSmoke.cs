@@ -205,6 +205,16 @@ public partial class MainWindow
             }
             Check("density-controls-reflow", densities.Count == 3);
             DensitySelector.SelectedIndex = 1; await Idle();
+            // A resize that keeps the column count resizes realized tiles in place.
+            var columnsBefore = _columns; var rowBefore = Gallery.ItemContainerGenerator.ContainerFromIndex(0);
+            var buttonBefore = VisualChildren<Button>(Gallery).FirstOrDefault(b => ReferenceEquals(b.DataContext, CurrentTiles[0]));
+            Width = 1380; await Idle();
+            var rowAfter = Gallery.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem;
+            var buttonAfter = VisualChildren<Button>(Gallery).FirstOrDefault(b => ReferenceEquals(b.DataContext, CurrentTiles[0]));
+            Check("resize-keeps-columns-in-place", _columns == columnsBefore && rowAfter is not null && ReferenceEquals(rowBefore, rowAfter) && buttonAfter is not null && ReferenceEquals(buttonBefore, buttonAfter)
+                && Math.Abs(buttonAfter.ActualWidth - _sheetRows[0].Widths[0]) <= 1 && Math.Abs(rowAfter.ActualHeight - _sheetRows[0].Extent) <= 1,
+                new { columnsBefore, _columns, sameRow = ReferenceEquals(rowBefore, rowAfter), sameButton = ReferenceEquals(buttonBefore, buttonAfter), buttonWidth = buttonAfter?.ActualWidth, expectedWidth = _sheetRows[0].Widths[0], rowHeight = rowAfter?.ActualHeight, expectedExtent = _sheetRows[0].Extent });
+            Width = 1400; await Idle();
             var scroll = VisualChildren<ScrollViewer>(Gallery).First();
             scroll.ScrollToVerticalOffset(_sheetRows[4].Offset); await Idle();
             var anchor = GetGalleryAnchor();

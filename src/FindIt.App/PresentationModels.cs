@@ -47,7 +47,15 @@ public sealed class ResultTile : INotifyPropertyChanged
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }
 
-public sealed record ResultRow(IReadOnlyList<ResultTile> Tiles, double Extent);
+/// <summary>A gallery row. Its extent changes in place, so a reflow that keeps the same tiles per row
+/// resizes the realized containers instead of recreating every tile.</summary>
+public sealed class ResultRow(IReadOnlyList<ResultTile> tiles, double extent) : INotifyPropertyChanged
+{
+    public IReadOnlyList<ResultTile> Tiles { get; } = tiles;
+    private double _extent = extent;
+    public double Extent { get => _extent; set { if (Math.Abs(value - _extent) < .001) return; _extent = value; PropertyChanged?.Invoke(this, new(nameof(Extent))); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
 
 /// <summary>Plain-language match explanations. Person matches stay qualified as possible.</summary>
 public static class MatchReason
@@ -175,16 +183,20 @@ internal sealed class ThumbnailCache
 {
     private readonly string _root;
     private readonly SemaphoreSlim _decodeSlots = new(2);
-    private readonly Dictionary<string, BitmapSource> _cache = [];
-    private readonly Queue<string> _order = [];
+    private sealed record Entry(BitmapSource Image, int SourceWidth, int SourceHeight);
+    private readonly Dictionary<string, LinkedListNode<(string Key, Entry Value)>> _cache = [];
+    private readonly LinkedList<(string Key, Entry Value)> _recent = [];
     private long _bytes;
     private const long Budget = 64 * 1024 * 1024;
     public ThumbnailCache(string root) => _root = Path.GetFullPath(root);
-    public async Task<BitmapSource?> ReadAsync(BlobReference? reference, CancellationToken token)
+    /// <param name="displayPixels">The cropped box this image fills, in device pixels; null keeps the preview size.</param>
+    public async Task<BitmapSource?> ReadAsync(BlobReference? reference, CancellationToken token, Size? displayPixels = null)
     {
         if (reference is null || reference.Offset < 0 || reference.Length <= 0 || reference.Length > 32 * 1024 * 1024) return null;
         var key = $"{reference.RelativePath}|{reference.Offset}|{reference.Length}";
-        lock (_cache) if (_cache.TryGetValue(key, out var existing)) return existing;
+        lock (_cache)
+            if (_cache.TryGetValue(key, out var node) && node.Value.Value is var cached && cached.Image.PixelWidth >= Math.Min(cached.SourceWidth, DecodeWidth(reference, cached.SourceWidth, cached.SourceHeight, displayPixels)))
+            { _recent.Remove(node); _recent.AddFirst(node); return cached.Image; }
         await _decodeSlots.WaitAsync(token);
         try
         {
@@ -198,12 +210,18 @@ internal sealed class ThumbnailCache
                 var data = new byte[reference.Length];
                 await stream.ReadExactlyAsync(data, token);
                 using var imageStream = new MemoryStream(data, false);
+                // The header gives the stored size without decoding, so the box can be covered exactly.
+                var source = BitmapDecoder.Create(imageStream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
+                int sourceWidth = source.PixelWidth, sourceHeight = source.PixelHeight;
+                imageStream.Position = 0;
                 var image = new BitmapImage();
-                image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.DecodePixelWidth = Math.Min(440, reference.Width > 0 ? reference.Width : 440); image.StreamSource = imageStream; image.EndInit(); image.Freeze();
+                image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.DecodePixelWidth = Math.Min(sourceWidth, DecodeWidth(reference, sourceWidth, sourceHeight, displayPixels)); image.StreamSource = imageStream; image.EndInit(); image.Freeze();
                 lock (_cache)
                 {
-                    if (!_cache.ContainsKey(key)) { _cache[key] = image; _order.Enqueue(key); _bytes += (long)image.PixelWidth * image.PixelHeight * 4; }
-                    while (_bytes > Budget && _order.TryDequeue(out var oldest)) if (_cache.Remove(oldest, out var old)) _bytes -= (long)old.PixelWidth * old.PixelHeight * 4;
+                    if (_cache.Remove(key, out var replaced)) { _recent.Remove(replaced); _bytes -= Bytes(replaced.Value.Value.Image); }
+                    _cache[key] = _recent.AddFirst((key, new Entry(image, sourceWidth, sourceHeight))); _bytes += Bytes(image);
+                    // Least recently shown first, so scrolling back to nearby rows stays in memory.
+                    while (_bytes > Budget && _recent.Last is { } oldest && oldest.Value.Key != key) { _recent.RemoveLast(); _cache.Remove(oldest.Value.Key); _bytes -= Bytes(oldest.Value.Value.Image); }
                 }
                 return image;
             }, token);
@@ -212,6 +230,10 @@ internal sealed class ThumbnailCache
         finally { _decodeSlots.Release(); }
     }
 
+    private static int DecodeWidth(BlobReference reference, int sourceWidth, int sourceHeight, Size? displayPixels) => displayPixels is { } box
+        ? ThumbnailSizing.CoverWidth(sourceWidth, sourceHeight, box.Width, box.Height)
+        : Math.Min(ThumbnailSizing.DefaultMaximumWidth, reference.Width > 0 ? reference.Width : ThumbnailSizing.DefaultMaximumWidth);
+    private static long Bytes(BitmapSource image) => (long)image.PixelWidth * image.PixelHeight * 4;
     private string ResolveArchiveBlob(string relative)
     {
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains(':') || relative.Contains('\0')) throw new IOException("Invalid thumbnail path.");

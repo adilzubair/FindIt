@@ -22,6 +22,35 @@ public class LibraryPresentationTests
     }
 
     [TestMethod]
+    // A 4:3 tile box of 248×186 device pixels.
+    [DataRow(640, 360, 384)] // wide video frame: the height decides (186 × 16/9 = 331 → 384)
+    [DataRow(640, 480, 256)] // same shape as the box: its width (248 → 256)
+    [DataRow(480, 640, 256)] // portrait photo: the width decides
+    [DataRow(200, 150, 200)] // never upscale a small stored thumbnail
+    public void ThumbnailDecodeCoversTheCroppedTileWithoutExtraPixels(int sourceWidth, int sourceHeight, int expected)
+    {
+        Assert.AreEqual(expected, ThumbnailSizing.CoverWidth(sourceWidth, sourceHeight, 248, 186));
+    }
+
+    [TestMethod]
+    public void ThumbnailDecodeFollowsDisplayScaleInWholeSteps()
+    {
+        Assert.AreEqual(384, ThumbnailSizing.CoverWidth(1024, 768, 248 * 1.5, 186 * 1.5)); // 372 at 150% scale
+        Assert.AreEqual(ThumbnailSizing.CoverWidth(1024, 768, 250, 187.5), ThumbnailSizing.CoverWidth(1024, 768, 255, 191.25), "Small reflows reuse one decode.");
+    }
+
+    [TestMethod]
+    [DataRow(0d, 100d)]
+    [DataRow(double.NaN, 100d)]
+    [DataRow(100d, double.PositiveInfinity)]
+    public void UnmeasuredThumbnailBoxKeepsThePreviewDecodeLimit(double width, double height)
+    {
+        Assert.AreEqual(ThumbnailSizing.DefaultMaximumWidth, ThumbnailSizing.CoverWidth(1024, 768, width, height));
+        Assert.AreEqual(300, ThumbnailSizing.CoverWidth(300, 200, width, height));
+        Assert.AreEqual(ThumbnailSizing.DefaultMaximumWidth, ThumbnailSizing.CoverWidth(0, 0, 248, 186));
+    }
+
+    [TestMethod]
     [DataRow(0d)]
     [DataRow(-500d)]
     [DataRow(double.NaN)]

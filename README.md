@@ -14,7 +14,7 @@ This repository contains a working **0.1.0 preview**, including native inference
 
 Windows 10 22H2 and Windows 11 x64 are the intended targets. This preview was built and exercised on Windows 11; the clean Windows 10 and older 8 GB laptop certification remains outstanding. Do not equate a successful developer-machine run with those compatibility gates.
 
-The native launcher copies **public application/runtime files only** to `%LOCALAPPDATA%\FindIt\runtime`. This disposable cache lets the UI survive drive removal and release executable handles before ejection. Models, originals, search indexes, extracted content, people, and preferences remain on the drive. The runtime cache can be removed while FindIt is closed.
+The native launcher copies **public application/runtime files only** to `%LOCALAPPDATA%\FindIt\runtime`. This disposable cache lets the UI survive drive removal and release executable handles before ejection. Models, originals, search indexes, extracted content, people, and preferences remain on the drive. The runtime cache can be removed while FindIt is closed. FindIt also records which model files it has already checksum-verified in `%LOCALAPPDATA%\FindIt\verification`, so later launches skip re-reading them from the drive; deleting that folder only means the next launch verifies them again.
 
 ## Build
 

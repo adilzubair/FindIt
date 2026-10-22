@@ -5,7 +5,14 @@ using FindIt.Shared;
 
 namespace FindIt.Core;
 
-internal sealed record ArtifactDigest(string Path, long Length, string Sha256, long LastWriteUtcTicks = 0);
+internal sealed record ArtifactDigest(string Path, long Length, string Sha256, long LastWriteUtcTicks = 0)
+{
+    // Publication records the open handle's precise write time; FAT32 then stores it on a
+    // two-second boundary. Differences inside that granularity are the same write, so the
+    // immutable bytes need no re-hash. Any larger difference still invalidates the fast path.
+    internal static readonly long WriteTimeGranularityTicks = 2 * TimeSpan.TicksPerSecond;
+    public bool WriteTimeMatches(DateTime observedUtc) => LastWriteUtcTicks != 0 && Math.Abs(observedUtc.Ticks - LastWriteUtcTicks) < WriteTimeGranularityTicks;
+}
 internal sealed record GenerationManifest
 {
     public int FormatVersion { get; init; } = 1;
@@ -108,8 +115,9 @@ internal sealed class ArchiveStorage
                     // FAT stores local timestamps, and copies can normalize modification times.
                     // A timestamp change invalidates the fast path, not the immutable bytes: hash
                     // the artifact before accepting it and cache this host's observed timestamp.
+                    // FAT's two-second rounding alone is not a change.
                     var observedWriteTime = info.LastWriteTimeUtc;
-                    bool timestampChanged = artifact.LastWriteUtcTicks != 0 && observedWriteTime.Ticks != artifact.LastWriteUtcTicks;
+                    bool timestampChanged = artifact.LastWriteUtcTicks != 0 && !artifact.WriteTimeMatches(observedWriteTime);
                     if ((smallRequired || timestampChanged) && !string.Equals(await HashFileAsync(path, cancellationToken), artifact.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("An archive artifact failed validation.");
                     verification[path] = (artifact.Length, observedWriteTime);
                 }

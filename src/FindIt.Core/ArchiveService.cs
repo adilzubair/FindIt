@@ -355,6 +355,7 @@ public sealed partial class ArchiveService : IArchiveBackend
 
     public async ValueTask DisposeAsync()
     {
+        warmUpCancellation.Cancel(); await semanticWarmUp; warmUpCancellation.Dispose();
         searchSessions.Clear();
         nativeIndex?.Dispose(); nativeDeltaIndex?.Dispose(); exactIndex?.Dispose();
         await embeddings.DisposeAsync(); await processor.DisposeAsync(); preparationGate.Dispose(); overlayGate.Dispose(); searchGate.Dispose();
