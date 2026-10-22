@@ -32,9 +32,9 @@ try {
     $taskResourceCompiler = Join-Path (Split-Path $taskCompiler -Parent) 'x86_64-w64-mingw32-windres.exe'
     if (-not (Test-Path -LiteralPath $taskResourceCompiler)) { throw 'Portable resource compiler is missing. Run Fetch-Dependencies.ps1.' }
     New-Item -ItemType Directory -Force artifacts/launcher | Out-Null
-    & $taskResourceCompiler -I src/FindIt.App/Assets -i src/FindIt.Launcher/launcher.rc -o artifacts/launcher/FindIt-icon.o -O coff
+    & $taskResourceCompiler -I src/FindIt.App/Assets -I src/FindIt.Launcher -i src/FindIt.Launcher/launcher.rc -o artifacts/launcher/FindIt-icon.o -O coff
     if ($LASTEXITCODE) { throw 'Native launcher icon resource build failed.' }
-    & $taskCompiler src/FindIt.Launcher/launcher.c artifacts/launcher/FindIt-icon.o -o artifacts/launcher/FindIt.exe -O2 -municode -mwindows -static '-Wl,--stack,16777216' -ladvapi32 -lshell32 -luser32
+    & $taskCompiler src/FindIt.Launcher/launcher.c artifacts/launcher/FindIt-icon.o -o artifacts/launcher/FindIt.exe -O2 -municode -mwindows -static '-Wl,--stack,16777216' -ladvapi32 -lshell32 -luser32 -lgdi32 -lcomctl32
     if ($LASTEXITCODE) { throw 'Native launcher build failed.' }
     if (-not $SkipTests) {
         if ($BuildArtifactsPath) {

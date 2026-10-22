@@ -16,6 +16,8 @@ Windows 10 22H2 and Windows 11 x64 are the intended targets. This preview was bu
 
 The native launcher copies **public application/runtime files only** to `%LOCALAPPDATA%\FindIt\runtime`. This disposable cache lets the UI survive drive removal and release executable handles before ejection. Models, originals, search indexes, extracted content, people, and preferences remain on the drive. The runtime cache can be removed while FindIt is closed. FindIt also records which model files it has already checksum-verified in `%LOCALAPPDATA%\FindIt\verification`, so later launches skip re-reading them from the drive; deleting that folder only means the next launch verifies them again.
 
+A native startup window appears before reading the drive's application files. First launch on a PC or after an update shows copy and verification progress and can be cancelled; later launches reuse the verified cache. Repeated clicks bring the startup or existing library window forward instead of opening another copy. Tiny disposable process records in `%LOCALAPPDATA%\FindIt\instances` support this behavior without keeping the USB launcher running. They contain no library content or filenames and can also be removed while FindIt is closed. Open the root `FindIt.exe` to use this behavior; launching the internal application directly bypasses the launcher.
+
 ## Build
 
 Build prerequisites: Windows x64, PowerShell 7.2+, .NET SDK 10.0.400, and network access for the initial dependency download. A compiler, CMake, Ninja, pinned native sources, models, codecs, and licenses are fetched into the workspace; Visual Studio and administrator access are unnecessary.
@@ -29,6 +31,8 @@ Build prerequisites: Windows x64, PowerShell 7.2+, .NET SDK 10.0.400, and networ
 The first command verifies artifact checksums, builds the baseline CPU libraries, launcher and managed solution, then runs integration tests. The second publishes self-contained Windows applications, includes the models/codecs, creates per-file runtime checksums, and writes `artifacts/portable` and `artifacts/portable.zip`. The third tests real model inference through the published worker against temporary originals; it refuses existing archives and cleans its test catalog afterward. Allow several GB of workspace/free package space. Subsequent builds can use `-SkipDependencies` after a complete first build.
 
 Use `-BuildArtifactsPath artifacts/my-build` on both build and publish scripts to isolate intermediate files and binaries from a running source application. Builds run the worker integration tests against that same isolated output. Normal builds and portable publication explicitly exclude the validation-only fault hooks.
+
+Run `./scripts/Test-Launcher.ps1` separately in an interactive Windows session to verify the native startup UI, rapid repeated clicks, cancellation, crash recovery, cold/warm cache behavior, separate libraries and corrupt-file rejection. It builds a small delayed-window fixture and uses a fresh workspace cache; its startup timing does not certify physical USB or clean-machine performance.
 
 To run source builds against a selected archive root:
 

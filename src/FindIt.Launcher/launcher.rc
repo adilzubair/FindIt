@@ -2,3 +2,4 @@
 
 // Resolved through the app Assets include directory in both native build paths.
 IDI_FINDIT ICON "FindIt.ico"
+1 24 "launcher.manifest"
