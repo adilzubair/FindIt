@@ -13,16 +13,18 @@ public sealed partial class ArchiveService : IArchiveBackend
     private readonly ArchiveStorage storage;
     private readonly IEmbeddingProvider embeddings;
     private readonly IContentProcessor processor;
+    private readonly SearchSessionCache searchSessions;
     private readonly SemaphoreSlim preparationGate = new(1, 1);
     private readonly SemaphoreSlim overlayGate = new(1, 1);
     private volatile bool preparing;
     public string RootPath => storage.Root;
 
-    public ArchiveService(string rootPath, IEmbeddingProvider embeddingProvider, IContentProcessor contentProcessor)
+    public ArchiveService(string rootPath, IEmbeddingProvider embeddingProvider, IContentProcessor contentProcessor, TimeProvider? timeProvider = null)
     {
         storage = new ArchiveStorage(rootPath);
         embeddings = embeddingProvider ?? throw new ArgumentNullException(nameof(embeddingProvider));
         processor = contentProcessor ?? throw new ArgumentNullException(nameof(contentProcessor));
+        searchSessions = new SearchSessionCache(timeProvider ?? TimeProvider.System);
     }
 
     public async Task<ArchiveStatus> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -353,6 +355,7 @@ public sealed partial class ArchiveService : IArchiveBackend
 
     public async ValueTask DisposeAsync()
     {
+        searchSessions.Clear();
         nativeIndex?.Dispose(); nativeDeltaIndex?.Dispose(); exactIndex?.Dispose();
         await embeddings.DisposeAsync(); await processor.DisposeAsync(); preparationGate.Dispose(); overlayGate.Dispose(); searchGate.Dispose();
     }

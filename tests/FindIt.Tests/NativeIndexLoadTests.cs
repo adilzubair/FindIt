@@ -12,6 +12,31 @@ public class NativeIndexLoadTests
     [TestCleanup]public void Cleanup(){if(Directory.Exists(root))Directory.Delete(root,true);}
 
     [TestMethod]
+    public void SearchExplorationCanChangeWithoutChangingReturnedCountOrPersistedGraph()
+    {
+        RequireNative(); Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "index.usearch"); Save(path, 384);
+        string hash = ScaleArtifacts.Hash(path);
+        foreach (bool mapped in new[] { true, false })
+        {
+            using var index = NativeVectorIndex.Open(path, mapped);
+            var query = ScaleAlgorithms.Vector(71, 999, "clustered-512", query: true);
+            var allowed = Enumerable.Range(0, 384).Where(i => i % 2 == 0).Select(i => (ulong)i).ToHashSet();
+            var baseline = index.Search(query, 50);
+            var explored = index.Search(query, 50, searchExpansion: 8192);
+            Assert.AreEqual(50, explored.Count);
+            var exact = Enumerable.Range(0, 384).Select(i => new { Key = (ulong)i, Score = ScaleAlgorithms.Cosine(Vector((ulong)i), query, ScaleAlgorithms.Norm(Vector((ulong)i)), ScaleAlgorithms.Norm(query)) })
+                .OrderByDescending(x => x.Score).ThenBy(x => x.Key).Take(50).Select(x => x.Key).ToHashSet();
+            Assert.IsTrue(explored.Count(n => exact.Contains(n.Key)) >= baseline.Count(n => exact.Contains(n.Key)));
+            CollectionAssert.AreEqual(baseline.ToArray(), index.Search(query, 50).ToArray(), "An earlier exploration setting leaked into a later default call.");
+            Assert.IsTrue(index.Search(query, 50, allowed, 8192).All(n => allowed.Contains(n.Key)));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => index.Search(query, 50, searchExpansion: 0));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => index.Search(query, 50, searchExpansion: 65537));
+            Assert.AreEqual(hash, ScaleArtifacts.Hash(path), "Search tuning edited an immutable persisted graph.");
+        }
+    }
+
+    [TestMethod]
     public void StreamingEligibilityUsesResolvedShortAsciiPathsAndAccountsForFallbackCopy()
     {
         string syntheticRoot=Path.Combine(Path.GetPathRoot(root)!,"findit-load-predicate"); // Pure policy test: no files under this path.

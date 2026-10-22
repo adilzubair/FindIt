@@ -14,6 +14,35 @@ public sealed class WorkerTests
     [TestCleanup] public void Cleanup() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
     [TestMethod]
+    public async Task ReaderRestartReturnsStructuredSearchRestartInsteadOfRerankingOldOffset()
+    {
+        for (int i = 0; i < 5; i++) await File.WriteAllTextAsync(Path.Combine(_root, "Documents", $"item-{i}.bin"), "filename-only fixture");
+        await using (var preparer = Start("preparer"))
+        {
+            await preparer.SendAsync("prepare", "archive.prepare", new PreparationRequest { Folders = ["Documents"] });
+            using var prepared = await preparer.ResponseAsync("prepare");
+            Assert.IsTrue(prepared.RootElement.TryGetProperty("result", out _), prepared.RootElement.ToString());
+        }
+        var request = new SearchRequest { Query = "item", Limit = 2, Filters = new() { ExactOnly = true } };
+        string cursor;
+        await using (var reader = Start("reader"))
+        {
+            await reader.SendAsync("first", "archive.search", request);
+            using var first = await reader.ResponseAsync("first");
+            cursor = first.RootElement.GetProperty("result").GetProperty("nextCursor").GetString()!;
+            Assert.IsFalse(string.IsNullOrEmpty(cursor));
+            await reader.SendAsync("next", "archive.search", request with { Cursor = cursor });
+            using var next = await reader.ResponseAsync("next");
+            Assert.IsFalse(next.RootElement.GetProperty("result").GetProperty("restartRequired").GetBoolean());
+        }
+        await using var restarted = Start("reader");
+        await restarted.SendAsync("expired", "archive.search", request with { Cursor = cursor });
+        using var expired = await restarted.ResponseAsync("expired");
+        Assert.IsTrue(expired.RootElement.GetProperty("result").GetProperty("restartRequired").GetBoolean());
+        Assert.AreEqual(0, expired.RootElement.GetProperty("result").GetProperty("results").GetArrayLength());
+    }
+
+    [TestMethod]
     public async Task ReaderRejectsPreparationAndKeepsTheDriveUnmodified()
     {
         await File.WriteAllTextAsync(Path.Combine(_root, "Documents", "plain.txt"), "forest document");

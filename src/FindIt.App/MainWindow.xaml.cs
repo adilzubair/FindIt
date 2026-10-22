@@ -37,6 +37,8 @@ public partial class MainWindow : Window
     private readonly Queue<int> _pageLru = [];
     private int _page, _columns;
     private long? _searchGeneration;
+    private int? _searchBudget;
+    private bool _boundedSearch;
     private SearchFilters _submittedFilters = new();
     private bool _initialized, _searching, _statusPolling, _dark, _closing, _closed, _ejectRequested;
     private bool _preparationUiBusy;
@@ -147,7 +149,8 @@ public partial class MainWindow : Window
             if (previousLibrary != Guid.Empty && _status.LibraryId != Guid.Empty && previousLibrary != _status.LibraryId)
             {
                 _searchCancellation?.Cancel(); ClosePreview(); CurrentTiles.Clear(); Rows.Clear(); _searchGeneration = null;
-                _pages.Clear(); _pageCursors.Clear(); _pageCursors.Add(null); _page = 0;
+                _pages.Clear(); _pageLru.Clear(); _pageCursors.Clear(); _pageCursors.Add(null); _page = 0;
+                _boundedSearch = false; SearchMoreButton.Visibility = Visibility.Collapsed;
                 var initialized = _initialized; _initialized = false; PersonFilter.SelectedIndex = 0; _initialized = initialized; CaptureFilterState(); UpdateFilterUi();
                 await LoadPeopleAsync();
                 Notice("A different archive is connected. Run your search to see this drive's files. Reopen a person before editing their details.");
@@ -201,7 +204,7 @@ public partial class MainWindow : Window
 
     private SearchFilters ReadFilters() => _filters.ToSearchFilters(DateTimeOffset.Now, TimeZoneInfo.Local);
 
-    private async Task SearchAsync(bool reset, int? targetPage = null, bool submitQuery = false)
+    private async Task SearchAsync(bool reset, int? targetPage = null, bool submitQuery = false, bool deepen = false)
     {
         if (_backend is null || _closing) return;
         CaptureFilterState();
@@ -211,6 +214,8 @@ public partial class MainWindow : Window
         var cancellation = _searchCancellation = new();
         if (reset)
         {
+            if (!deepen) _searchBudget = null;
+            _boundedSearch = false;
             _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null; ClosePreview();
             if (submitQuery) _submittedQuery = QueryBox.Text.Trim();
             _submittedFilters = ReadFilters();
@@ -219,19 +224,31 @@ public partial class MainWindow : Window
         _searchError = null;
         _searching = true; SearchProgress.Visibility = Visibility.Visible; ResultCount.Text = "Searching…";
         PreviousPageButton.IsEnabled = NextPageButton.IsEnabled = false;
+        SearchMoreButton.IsEnabled = false;
         if (CurrentTiles.Count == 0) UpdateEmptyState();
         try
         {
-            if (!_pages.TryGetValue(requestedPage, out var response))
-            {
-                response = await _backend.SearchAsync(new() { Query = _submittedQuery, Filters = _submittedFilters, Limit = 256, Cursor = _pageCursors.ElementAtOrDefault(requestedPage), GenerationId = _searchGeneration }, cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
-                _searchGeneration = response.GenerationId;
-                _pages[requestedPage] = response; _pageLru.Enqueue(requestedPage);
-                while (_pages.Count > 8 && _pageLru.TryDequeue(out var oldest)) _pages.Remove(oldest);
-                if (response.NextCursor is not null && _pageCursors.Count == requestedPage + 1) _pageCursors.Add(response.NextCursor);
-            }
+            // Even a previously viewed page validates its worker session. Cached page
+            // metadata must not bypass expiry, generation changes or people corrections.
+            var response = await _backend.SearchAsync(new() { Query = _submittedQuery, Filters = _submittedFilters, Limit = 256,
+                Cursor = _pageCursors.ElementAtOrDefault(requestedPage), GenerationId = _searchGeneration, RetrievalBudget = _searchBudget }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
+            if (response.RestartRequired)
+            {
+                _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null;
+                ClosePreview(); CurrentTiles.Clear(); Rows.Clear();
+                _searchError = string.IsNullOrWhiteSpace(response.Notice) ? "Run the search again." : response.Notice;
+                ResultCount.Text = "Search needs restarting"; Notice(_searchError);
+                SearchMoreButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+            _searchGeneration = response.GenerationId;
+            _boundedSearch = response.IsBoundedWindow;
+            if (response.PageCursor is not null) _pageCursors[requestedPage] = response.PageCursor;
+            if (!_pages.ContainsKey(requestedPage)) _pageLru.Enqueue(requestedPage);
+            _pages[requestedPage] = response;
+            while (_pages.Count > 8 && _pageLru.TryDequeue(out var oldest)) _pages.Remove(oldest);
+            if (response.NextCursor is not null && _pageCursors.Count == requestedPage + 1) _pageCursors.Add(response.NextCursor);
             if (_page != requestedPage) ClosePreview();
             _page = requestedPage;
             CurrentTiles.Clear();
@@ -240,6 +257,10 @@ public partial class MainWindow : Window
             EmptyState.Visibility = CurrentTiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             var first = _page * 256 + 1; var last = _page * 256 + CurrentTiles.Count;
             ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")}{(response.NextCursor is not null && response.TotalCount is null ? " · More results available" : "")}";
+            if (response.IsBoundedWindow) ResultCount.Text += " · Ranked selection";
+            SearchMoreButton.Visibility = response.CanSearchDeeper ? Visibility.Visible : Visibility.Collapsed;
+            SearchMoreButton.IsEnabled = response.CanSearchDeeper;
+            SearchMoreButton.Tag = response.RetrievalBudget;
             PreviousPageButton.IsEnabled = _page > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
             if (!string.IsNullOrWhiteSpace(response.Notice)) Notice(response.Notice); else if (!_status.IsPreparing) HideNotice(true);
         }
@@ -258,6 +279,7 @@ public partial class MainWindow : Window
                 {
                     PreviousPageButton.IsEnabled = _page > 0;
                     NextPageButton.IsEnabled = _pages.TryGetValue(_page, out var visiblePage) && visiblePage.NextCursor is not null;
+                    SearchMoreButton.IsEnabled = visiblePage?.CanSearchDeeper == true;
                     ResultCount.Text = $"Page {_page + 1:N0} · Could not load that page. Try again.";
                 }
             }
@@ -321,7 +343,7 @@ public partial class MainWindow : Window
     private void UpdateEmptyState()
     {
         var prepared = _status.FileCount > 0;
-        EmptyTitle.Text = !_status.Connected ? "Your drive is disconnected" : _searching ? "Searching your archive" : _searchError is not null ? "Search could not finish" : prepared ? "No matches yet" : "Your archive, ready to discover";
+        EmptyTitle.Text = !_status.Connected ? "Your drive is disconnected" : _searching ? "Searching your archive" : _searchError is not null ? "Run your search again" : prepared ? _boundedSearch ? "No matches in this selection" : "No matches yet" : "Your archive, ready to discover";
         EmptyDescription.Text = !_status.Connected ? "Reconnect this drive to pick up where you left off." : _searching ? "Finding files that match your search." : _searchError is not null ? "Try again. Your search and filters are still here." : prepared ? "Try a broader description, remove a filter, or search for words you remember." : "Choose folders to make your photos, videos and documents searchable offline.";
         EmptyAction.Content = _searchError is not null ? "Try search again" : prepared ? "Clear search and filters" : "Prepare this drive";
         EmptyAction.Visibility = _searching ? Visibility.Collapsed : Visibility.Visible;

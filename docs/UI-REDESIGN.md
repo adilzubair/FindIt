@@ -34,6 +34,8 @@ Reports and images are generated under:
 
 These ignored artifacts are local verification outputs, not checked-in product assets.
 
+The subsequent [search session update](search-next-validation.md) adds **Search more**, ranked-selection labeling, and a query-preserving restart path. Its separate verification passed 198 regression tests and 99 WPF interaction checks; compact light/dark captures and `interaction.json` are retained in `artifacts/search-next-ui`. These later results do not replace the remaining physical accessibility/display checks below.
+
 ## Reproduce
 
 Build with the repository's .NET 10 SDK and existing dependencies:

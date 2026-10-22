@@ -17,6 +17,25 @@ public class ScaleBenchmarkTests
     }
 
     [TestMethod]
+    public void QueryOffsetsSeparateTuningFromEvaluationAndBindExactReferences()
+    {
+        var (directory, dataset) = Dataset(300);
+        var tuning = ScaleBenchmark.EnsureTruth(directory, dataset, 4, dataset.Seed, CancellationToken.None, 256);
+        var evaluation = ScaleBenchmark.EnsureTruth(directory, dataset, 4, dataset.Seed, CancellationToken.None, 512);
+        Assert.AreNotEqual(tuning.QueryFingerprint, evaluation.QueryFingerprint);
+        Assert.AreEqual(256, tuning.QueryOffset); Assert.AreEqual(512, evaluation.QueryOffset);
+        for (int q = 0; q < 4; q++)
+        {
+            var query = ScaleAlgorithms.Vector(dataset.Seed, (ulong)(256 + q), dataset.Distribution, query: true);
+            var expected = Enumerable.Range(0, dataset.Count).Select(id => new { Id = id, Score = ScalarCosine(ScaleAlgorithms.Vector(dataset.Seed, (ulong)id, dataset.Distribution), query) })
+                .OrderByDescending(x => x.Score).ThenBy(x => x.Id).Take(50).Select(x => (ulong)x.Id).ToArray();
+            CollectionAssert.AreEqual(expected, tuning.Neighbors[q][0].Select(x => x.Key).ToArray());
+        }
+        ScaleArtifacts.AtomicWrite(Path.Combine(directory, "truth-q4-offset256.json"), tuning with { QueryFingerprint = "incorrect" });
+        Assert.ThrowsExactly<InvalidDataException>(() => ScaleBenchmark.EnsureTruth(directory, dataset, 4, dataset.Seed, CancellationToken.None, 256));
+    }
+
+    [TestMethod]
     public void HeldOutQueriesAreIndependentAndFp16Stable()
     {
         foreach (string distribution in ScaleAlgorithms.Distributions)

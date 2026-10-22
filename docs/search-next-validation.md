@@ -1,6 +1,6 @@
 # Search follow-up: stable paging and ANN validation
 
-These are **unimplemented release tasks**, except for the small-filter routing correction described below. Production ANN parameters remain unchanged. Passing the portable regression suite does not close the ANN accuracy gate.
+Stable ranked paging and the bounded 100k ANN tuning/evaluation are implemented. Reader search expansion is now **8,192**, independent of the returned-candidate budget; graph construction remains unchanged. This closes the described 100k experiment, not the full scale, media relevance, or older-hardware release gates.
 
 ## Measured limits and confidence
 
@@ -10,21 +10,23 @@ The reader uses reciprocal-rank fusion; `SearchResult.Score` is a ranking value,
 
 ## Stable, bounded pagination
 
-`ArchiveSearch` currently requests `min(16384, max(512, (offset + limit) * 4))` candidates. The interface requests 256 files, so its first search asks for 1,024 candidates. Later pages increase that budget. The pinned native search uses `max(expansionSearch, requestedCandidates)`, so paging also changes graph exploration. Newly discovered neighbors can reorder earlier file positions; applying the next offset can skip or repeat files even when the archive is unchanged. Generation/query/filter checks in the current cursor do not freeze rankings.
+Previously, `ArchiveSearch` increased candidates with `(offset + limit) * 4`, reranking each page and potentially skipping/repeating files. It now retrieves and groups once using `clamp(request.RetrievalBudget ?? max(512, limit * 4), 512, 16384)`. The interface retains its 256-file page and 1,024-candidate initial window. Continuation pages do not encode or traverse the graph again.
 
-The proposed worker query session should:
+The worker query session:
 
-- Encode, retrieve, fuse, and group once at the current first-page budget. Freeze ranked file IDs, matching segment IDs, and bounded provenance; hydrate page metadata separately. Do not eagerly request 16,384 candidates or retain full passage text and image data.
-- Bind the session to generation, encoder fingerprint, normalized query, filters, resolved people, overlay `settings.revision`, and retrieval budget. A versioned opaque cursor contains a random session ID and offset.
-- Keep at most two sessions, with an 8 MiB total budget and a proposed ten-minute idle expiry. Sessions are disposable worker memory and never archive files.
-- Return a structured `SearchResponse.RestartRequired` when the session expires, the worker restarts, or archive/people state changes. The interface clears its page/cursor cache and offers a fresh search, rather than silently reranking at an old offset.
-- Treat deeper retrieval as an explicit fresh window that resets paging. Preserve ordinary empty-query SQL browsing. A bounded approximate window is not an exhaustive archive result count.
+- Freezes ranked file IDs, at most 12 matching segment IDs per file, score/category provenance, and bounded query/person metadata. It hydrates text, snippets, thumbnails and face evidence only for the requested page.
+- Binds to library/generation, prepared/current encoder fingerprints and availability, normalized query, SQL filters, sorted resolved people, overlay `settings.revision`, page size, retrieval budget and exploration setting. Versioned `s1` cursors identify a random session ID and offset; `PageCursor` also permits revalidating the first page.
+- Retains at most two sessions and an estimated 8 MiB total, using conservative per-entry accounting and LRU eviction. Oversized windows are truncated before retention. Ten-minute idle expiry uses monotonic time; expiry is checked on cache access. No session is written to the archive.
+- Returns `SearchResponse.RestartRequired` for invalid, expired, evicted or unknown cursors and changed bindings, including worker restart. A revision change during retrieval discards the mixed response. The interface clears its pages, cursors and preview and offers a retry preserving the submitted query/filters. Previously viewed pages also validate their worker cursor.
+- Exposes **Search more** as an explicit fresh, larger window, restarting at page one. `IsBoundedWindow` labels ranked selections; no exhaustive archive count is claimed. Ordinary empty-query/people-only browsing retains SQL paging with separately versioned, generation/revision-bound `b1` cursors.
 
-`SearchRequest.Cursor` can remain opaque. The affected components are Shared response contracts, Core session lifecycle and hydration, and App restart handling; Client transport can remain generic. This is a medium refactor, rather than a parameter change. Required tests cover duplicate/omitted page IDs, one encoding per session, generation/people invalidation, eviction/expiry, malformed cursors, cancellation, and worker restart. Query-cache-free certification must still measure fresh first-page searches separately from continuation pages.
+Client transport remains generic. Regression tests cover duplicate/omitted page IDs, fixed windows versus explicit deeper retrieval, one encoding per session, revisited moment IDs, generation/people/encoder/filter/budget invalidation, concurrent people mutation, expiry/LRU/byte eviction, malformed cursors, cancellation and a real child-worker restart. The WPF harness exercises restart, query preservation and deeper retrieval. Query-cache-free certification must measure fresh first pages separately from continuation pages.
+
+Verification: Release solution build passed with zero warnings/errors; **198 tests** passed with zero failed/skipped (`artifacts/search-next-tests/search-next-full.trx`); **99 WPF interaction checks** passed (`artifacts/search-next-ui/interaction.json`). Compact light/dark captures in that UI directory were visually reviewed. The first sandboxed test attempt could not connect to its child test process and was retained as an aborted TRX; the permitted rerun and full suite passed.
 
 ## Bounded ANN tuning experiment
 
-Reuse the verified immutable 100,000-vector graphs first; no re-embedding is needed. Preserve the existing failed report. For both distributions, use corpus seed 42 and independent query IDs **256–511 for tuning** and **512–767 for untouched evaluation**, with `query=true`. Both sets cover all 256 synthetic centroids. Changing the seed would also change those centroids, so query identity needs its own offset/domain and reference fingerprint.
+The experiment reused the checksum-verified, **serially constructed** 100,000-vector graphs for both distributions with corpus seed 42. It retained all prior failures. Query IDs **256–511** were used for tuning, and **512–767** were evaluated only after freezing the policy, with `query=true`. Both sets cover every synthetic centroid. `--query-offset`, `--search-expansion`, and exact-reference fingerprints separate these sets without changing corpus centroids or rebuilding/embedding the graphs.
 
 Compare `(returned candidates, configured search expansion)`:
 
@@ -35,7 +37,22 @@ Compare `(returned candidates, configured search expansion)`:
 | 1,024 | 2,048 / 4,096 / 8,192 | Increase exploration without increasing page hydration |
 | 512 | Selected expansion | Separate returned-metadata cost from exploration cost |
 
-Select a policy from tuning recall and latency, freeze it, then evaluate the untouched set once in loaded and mapped modes for every filter scenario. Report mean and minimum per-query Recall@50, not self-match or stored-key checks. Keep the 95% mean gate; a failed evaluation remains a failure. If the bounded exploration sweep cannot pass, investigate graph construction separately. Beam width is not a hard cap on distance calculations or storage reads. Serial and parallel graphs require separate quality measurements.
+The 1,024-candidate isotropic unfiltered tuning means were 50.15%, 71.08%, 87.95% and **97.04%** at configured expansions 128, 2,048, 4,096 and 8,192. The 512-candidate/8,192 expansion diagnostic had the same 97.04% mean. Every filter/access-mode scenario for both distributions passed at 8,192, the smallest tested passing expansion. The frozen policy and SHA-256 inventory of tuning reports are in `artifacts/search-tuning/frozen-policy.json`; all experiment reports remain in that directory. Reader base and delta searches use this expansion while preserving their returned-candidate limits. Native mapped/loaded regression checks verify the setting is per-call and never edits the saved graph.
+
+The untouched evaluation uses 256 queries per distribution, both fresh-process access modes, exhaustive canonical FP16 top-50 references and the unchanged 95% mean gate. It reports per-query recall, minimum recall, latency and resident memory. See the retained `*-evaluation.json` reports for results. Beam width does not cap distance calculations or storage reads. These serial 100k graphs do not certify the parallel million-record graph, real media, cold storage or the 8 GB laptop.
+
+Evaluation results (mean/minimum recall are identical in both access modes):
+
+| Distribution | Eligibility | Mean Recall@50 | Minimum query recall | Mapped warm P95 | Loaded warm P95 |
+|---|---|---:|---:|---:|---:|
+| Isotropic 100k | All | 97.17% | 90% | 101.26 ms | 90.13 ms |
+| Isotropic 100k | 10% | 100% | 100% | 142.92 ms | 120.99 ms |
+| Isotropic 100k | 1% | 100% | 100% | 125.49 ms | 120.70 ms |
+| Clustered 100k | All | 100% | 100% | 32.55 ms | 31.38 ms |
+| Clustered 100k | 10% | 100% | 100% | 119.68 ms | 122.77 ms |
+| Clustered 100k | 1% | 100% | 100% | 120.84 ms | 135.46 ms |
+
+The 1,024-candidate/128-expansion tuning baseline was 50.15% on the difficult dataset; its earlier retained 64-query run was 50.78%. The new evaluation uses different, untouched queries. No evaluation result was used to select or retune the policy. The 90% worst-query result is retained; a mean gate does not promise 95% on every query. These timings exclude model encoding, SQL, hydration and UI work and used uncontrolled OS caches.
 
 ## Filtered search and older hardware
 

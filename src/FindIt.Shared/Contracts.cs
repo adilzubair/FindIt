@@ -61,6 +61,8 @@ public sealed record SearchRequest
     public int Limit { get; init; } = 256;
     public string? Cursor { get; init; }
     public long? GenerationId { get; init; }
+    // A larger retrieval window starts a new search; continuation pages keep this budget.
+    public int? RetrievalBudget { get; init; }
 }
 
 public sealed record SearchMoment
@@ -112,6 +114,11 @@ public sealed record SearchResponse
     public long GenerationId { get; init; }
     public IReadOnlyList<SearchResult> Results { get; init; } = [];
     public string? NextCursor { get; init; }
+    public string? PageCursor { get; init; }
+    public bool RestartRequired { get; init; }
+    public bool IsBoundedWindow { get; init; }
+    public bool CanSearchDeeper { get; init; }
+    public int RetrievalBudget { get; init; }
     public long? TotalCount { get; init; }
     public bool SemanticUsed { get; init; }
     public string Notice { get; init; } = "";

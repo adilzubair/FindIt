@@ -39,6 +39,17 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         }
         async Task Click(ButtonBase button) { button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, button)); await Idle(); }
+        void CaptureSearchWindow(string name)
+        {
+            var surface = (FrameworkElement)Content;
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)surface.ActualWidth, (int)surface.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+            bitmap.Render(surface);
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            string directory = Path.GetDirectoryName(Path.GetFullPath(reportPath))!;
+            Directory.CreateDirectory(directory);
+            using var output = File.Create(Path.Combine(directory, name + ".png")); encoder.Save(output);
+        }
         async Task RemoveChip(string key)
         {
             var chip = ActiveFilterPanel.Children.OfType<Button>().Single(b => Equals(b.Tag, key));
@@ -146,9 +157,22 @@ public partial class MainWindow
             Check("successful-page-change-closes-stale-inspector", _selectedResult is null && !PreviewPanel.IsVisible && CurrentTiles.All(tile => !tile.IsSelected));
             Check("paging-keeps-submitted-query-and-generation", _page == 1 && backend.Requests.Last().Query == "sample" && backend.Requests.Last().GenerationId == 42 && ResultCount.Text.Contains("257"));
             var pageRequests = backend.Requests.Count; await Click(PreviousPageButton);
-            Check("previous-page-uses-cache", _page == 0 && backend.Requests.Count == pageRequests && CurrentTiles.Count == 256);
+            Check("previous-page-validates-worker-session", _page == 0 && backend.Requests.Count == pageRequests + 1 && CurrentTiles.Count == 256 && backend.Requests.Last().Cursor == "0");
             await Click(NextPageButton); await Click(NextPageButton);
             Check("final-page-and-accurate-range", _page == 2 && CurrentTiles.Count == 138 && !NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
+            backend.RestartNextSearch = true; await Click(PreviousPageButton);
+            Check("expired-session-clears-pages-and-offers-restart", CurrentTiles.Count == 0 && _pages.Count == 0 && _pageCursors.Count == 1 && _searchGeneration is null && !NextPageButton.IsEnabled && !PreviousPageButton.IsEnabled && Equals(EmptyAction.Content, "Try search again"));
+            await Click(EmptyAction);
+            Check("session-restart-keeps-submitted-query", _page == 0 && backend.Requests.Last().Cursor is null && backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == 256);
+            await Click(SearchMoreButton);
+            Check("deeper-search-starts-new-window", _page == 0 && backend.Requests.Last().Cursor is null && backend.Requests.Last().RetrievalBudget == 2048 && CurrentTiles.Count == 256);
+            foreach (bool dark in new[] { false, true })
+            {
+                SetDarkTheme(dark); Width = 880; Height = 520; await Idle();
+                Check("bounded-search-controls-fit-compact-" + dark, Bounds(ResultCount).Right <= Bounds(SearchMoreButton).Left && Bounds(NextPageButton).Right <= Bounds(PaginationBar).Right + 1);
+                CaptureSearchWindow(dark ? "bounded-search-dark-compact" : "bounded-search-light-compact");
+            }
+            SetDarkTheme(false); Width = 1400; Height = 900; await Idle();
             QueryBox.Clear(); SearchClick(this, new RoutedEventArgs()); await Idle();
 
             var densities = new List<object>();
@@ -364,6 +388,7 @@ public partial class MainWindow
         public bool ReverseFolders { get; set; }
         public bool ReverseResults { get; set; }
         public bool FailNextSearch { get; set; }
+        public bool RestartNextSearch { get; set; }
         public bool DelayNextSave { get; set; }
         public TaskCompletionSource SaveStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseSave { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -381,12 +406,16 @@ public partial class MainWindow
             try { if (request.Query == "slow") { SlowStarted.TrySetResult(); await Task.Delay(500, cancellationToken); } else await Task.Delay(10, cancellationToken); }
             catch (OperationCanceledException) { CancelledSearches++; if (request.Query == "slow") SlowCancelled.TrySetResult(); throw; }
             if (FailNextSearch) { FailNextSearch = false; throw new IOException("Simulated search failure."); }
+            if (RestartNextSearch) { RestartNextSearch = false; return new SearchResponse { GenerationId = 42, RestartRequired = true, Notice = "Session expired. Run the search again." }; }
             var filters = request.Filters;
             var results = _files.Where((file, index) => (filters.Kind is null || file.Kind == filters.Kind) && (filters.Folder is null || file.RelativePath.StartsWith(filters.Folder + "/", StringComparison.Ordinal)) && (filters.PersonIds.Count == 0 || filters.PersonIds.Contains(PersonId(index % 40))) && (filters.AfterUtc is null || file.ModifiedUtc >= filters.AfterUtc) && (filters.BeforeUtc is null || file.ModifiedUtc < filters.BeforeUtc) && (request.Query.Length == 0 || file.Name.Contains(request.Query, StringComparison.OrdinalIgnoreCase))).ToArray();
             if (ReverseResults) Array.Reverse(results);
             var offset = int.TryParse(request.Cursor, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
             var limit = Math.Min(256, request.Limit); var page = results.Skip(offset).Take(limit).ToArray();
-            return new SearchResponse { GenerationId = 42, Results = page, TotalCount = request.Query.Length == 0 ? results.Length : null, NextCursor = offset + page.Length < results.Length ? (offset + page.Length).ToString(CultureInfo.InvariantCulture) : null, ElapsedMilliseconds = 10 };
+            return new SearchResponse { GenerationId = 42, Results = page, TotalCount = request.Query.Length == 0 ? results.Length : null,
+                PageCursor = offset.ToString(CultureInfo.InvariantCulture), IsBoundedWindow = request.Query.Length > 0,
+                CanSearchDeeper = request.Query.Length > 0, RetrievalBudget = request.RetrievalBudget ?? 1024,
+                NextCursor = offset + page.Length < results.Length ? (offset + page.Length).ToString(CultureInfo.InvariantCulture) : null, ElapsedMilliseconds = 10 };
         }
         public Task<IReadOnlyList<PersonRecord>> GetPeopleAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PersonRecord>>(_records.ToArray());
         public Task<IReadOnlyList<PersonObservation>> GetPersonObservationsAsync(Guid personId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PersonObservation>>([]);

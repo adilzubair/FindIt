@@ -43,6 +43,7 @@ Never point preparation at a folder you do not intend to catalog. Files are open
 - A light/dark WPF gallery, paged metadata, recycled contact-sheet rows, bounded thumbnail cache, keyboard navigation, people review, preparation controls, and disconnected states.
 - Isolated reader, preparer, and LibVLC playback workers over cancellable framed JSON-RPC.
 - Real EmbeddingGemma 2 Q8 text/image/video/audio encoding, 512-dimensional normalized FP16 canonical vectors, USearch mapped indexes, filtered exact retrieval, SQLite FTS5, and reciprocal rank fusion.
+- Stable ranked search windows with page-only metadata loading, explicit session restart and **Search more**. ANN exploration is tuned separately from returned results; see [the 100k held-out measurements and remaining scope](docs/search-next-validation.md).
 - Streaming media extraction, frame/face sampling, temporal windows bounded by detected scene cuts, overlapping audio windows, Whisper small with offline voice activity detection, PDF rendering/OCR, and text/Open XML extraction.
 - YuNet/SFace face observations, reference enrollment, named groups, aliases, membership confirmations/rejections, and timestamp-constrained people search. Person results show the sampled context frame and face crop and open playback at that observation. Multiple selected people must share a sampled frame.
 - Portable relative paths and library IDs, resumable file transactions, immutable generations, checksummed publication, retained previous results, bounded incremental indexes, and collection of unused application artifacts.

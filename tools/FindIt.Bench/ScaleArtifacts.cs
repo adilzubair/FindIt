@@ -8,7 +8,7 @@ public sealed record ScaleDataset(int Schema, string Owner, int Count, int Seed,
 public sealed record ScaleIndex(string DatasetSha256, string NativeSha256, long Bytes, string Sha256, double BuildMs,
     int BuildConcurrency = 1, int BuildBatchRows = 1);
 public sealed record ScaleTruth(string DatasetSha256, int QueryCount, int QuerySeed, long ScannedRows,
-    double ElapsedMs, ExactNeighbor[][][] Neighbors);
+    double ElapsedMs, ExactNeighbor[][][] Neighbors, int QueryOffset = 0, string? QueryFingerprint = null);
 
 public static class ScaleArtifacts
 {

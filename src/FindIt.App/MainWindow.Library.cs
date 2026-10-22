@@ -132,6 +132,12 @@ public partial class MainWindow
     private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; Navigate("search"); await SearchAsync(true, submitQuery: true); } }
     private async void PreviousClick(object sender, RoutedEventArgs e) { if (_page > 0) await SearchAsync(false, _page - 1); }
     private async void NextClick(object sender, RoutedEventArgs e) { if (_pageCursors.Count > _page + 1) await SearchAsync(false, _page + 1); }
+    private async void SearchMoreClick(object sender, RoutedEventArgs e)
+    {
+        if (SearchMoreButton.Tag is not int budget) return;
+        _searchBudget = Math.Min(16384, budget * 2);
+        await SearchAsync(true, deepen: true);
+    }
 
     private void DensityChanged(object sender, SelectionChangedEventArgs e)
     {

@@ -24,10 +24,13 @@ public static class ScaleBenchmark
             string distribution = Option(args, "--distribution") ?? "isotropic-512";
             string mode = Option(args, "--index-mode") ?? "both";
             int candidateCount = int.Parse(Option(args, "--candidate-count") ?? "512");
+            int searchExpansion = int.Parse(Option(args, "--search-expansion") ?? "128");
+            int queryOffset = int.Parse(Option(args, "--query-offset") ?? "0");
             int buildConcurrency = int.Parse(Option(args,"--build-concurrency")??Math.Min(8,Environment.ProcessorCount).ToString());
             if (count < 100 || count > 2_000_000 || queries < 4 || queries > 1024 || !ScaleAlgorithms.Distributions.Contains(distribution) || !new[] { "mapped", "loaded", "both" }.Contains(mode))
                 throw new ArgumentException("Use 100–2,000,000 records, 4–1024 queries, distribution isotropic-512/clustered-512, mode mapped/loaded/both.");
             if (candidateCount < 50 || candidateCount > 16384) throw new ArgumentException("Use 50–16384 --candidate-count; default 512 matches the reader's minimum semantic candidate request.");
+            if (queryOffset < 0 || queryOffset > int.MaxValue - queries || searchExpansion is < 1 or > 65536) throw new ArgumentException("Use a nonnegative --query-offset and 1–65536 --search-expansion.");
             if(buildConcurrency<1||buildConcurrency>8)throw new ArgumentException("Use 1–8 --build-concurrency; default is min(8,logical processors).");
             directory = ScaleArtifacts.DatasetDirectory(Option(args, "--root") ?? "artifacts/scale", count, seed, distribution);
             string marker = Path.Combine(directory, "dataset.json");
@@ -39,21 +42,22 @@ public static class ScaleBenchmark
             state = EnsureDataset(directory, state, cancellation.Token);
             var index = ScaleNativeBuilder.Build(directory,state,cancellation.Token,buildConcurrency:buildConcurrency);
             int querySeed = seed;
-            var truth = EnsureTruth(directory, state, queries, querySeed, cancellation.Token);
+            var truth = EnsureTruth(directory, state, queries, querySeed, cancellation.Token, queryOffset);
             var measurements = new List<JsonElement>();
             foreach (string access in mode == "both" ? new[] { "mapped", "loaded" } : [mode])
-                measurements.Add(await RunMeasurementAsync(directory, access, queries, candidateCount, cancellation.Token));
+                measurements.Add(await RunMeasurementAsync(directory, access, queries, candidateCount, searchExpansion, queryOffset, cancellation.Token));
             bool passed = measurements.All(x => x.GetProperty("recallGatePassed").GetBoolean());
             var report = new
             {
                 kind = "synthetic-ann-scale-validation", schema = 1, measuredUtc = DateTimeOffset.UtcNow,
-                dataset = state, directory, queryCount = queries, querySeed, k = ScaleAlgorithms.TopK, candidateCount,
-                independentQueries = true, productionSettings = new { metric = "cosine", storedScalar = "fp16", connectivity = 16, expansionAdd = 128, expansionSearch = 128 },
+                dataset = state, directory, queryCount = queries, querySeed, queryOffset, queryFingerprint = truth.QueryFingerprint,
+                k = ScaleAlgorithms.TopK, candidateCount, searchExpansion, effectiveSearchExpansion = Math.Max(candidateCount, searchExpansion),
+                independentQueries = true, graphConstructionSettings = new { metric = "cosine", storedScalar = "fp16", connectivity = 16, expansionAdd = 128, expansionSearch = 128 },
                 reference = new { method = "Exhaustive cosine over every eligible canonical FP16 row; independent FP16-rounded queries; SIMD float products with double accumulation.", scannedRows = truth.ScannedRows, elapsedMs = truth.ElapsedMs },
                 index,
                 construction = new { requestedConcurrency=buildConcurrency, actualIndexConcurrency=index.BuildConcurrency, actualIndexBatchRows=index.BuildBatchRows,
                     scope="Benchmark construction only. Production preparation still inserts serially. Parallel graph insertion order is nondeterministic, so recall must be measured for each built graph; older completed serial graphs remain reusable and retain concurrency=1." },
-                storage = new { canonicalBytes = new FileInfo(Path.Combine(directory, "vectors.f16")).Length, indexBytes = index.Bytes, truthBytes = new FileInfo(TruthPath(directory, queries)).Length },
+                storage = new { canonicalBytes = new FileInfo(Path.Combine(directory, "vectors.f16")).Length, indexBytes = index.Bytes, truthBytes = new FileInfo(TruthPath(directory, queries, queryOffset)).Length },
                 recallGate = new { minimumMeanRecallAt50 = .95, passed, appliesTo = "Each unfiltered, 10% filter, and 1% filter scenario in each access mode." },
                 scope = "Synthetic USearch retrieval only. This does not certify text encoding, semantic usefulness, full reader/UI memory, physical drive performance, 8 GB hardware, or a clean offline Windows machine.",
                 osCache = "Uncontrolled. Separate fresh child processes exclude managed build/truth memory, but dataset hashing/building and previous runs can warm the Windows filesystem cache. These are process-cold measurements, not disk-cold certification.",
@@ -122,16 +126,21 @@ public static class ScaleBenchmark
     }
 
 
-    internal static string TruthPath(string directory, int queryCount) => Path.Combine(directory, $"truth-q{queryCount}.json");
-    public static ScaleTruth EnsureTruth(string directory, ScaleDataset dataset, int queryCount, int querySeed, CancellationToken token)
+    internal static string TruthPath(string directory, int queryCount, int queryOffset = 0) => Path.Combine(directory, queryOffset == 0 ? $"truth-q{queryCount}.json" : $"truth-q{queryCount}-offset{queryOffset}.json");
+    public static string QueryFingerprint(int seed, int count, int offset, string distribution) =>
+        Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"splitmix64-fp16-v1|query=true|{seed}|{count}|{offset}|{distribution}"))).ToLowerInvariant();
+    public static ScaleTruth EnsureTruth(string directory, ScaleDataset dataset, int queryCount, int querySeed, CancellationToken token, int queryOffset = 0)
     {
-        string path = TruthPath(directory, queryCount);
+        if (queryCount < 1 || queryOffset < 0 || queryOffset > int.MaxValue - queryCount) throw new ArgumentOutOfRangeException(nameof(queryOffset));
+        string fingerprint = QueryFingerprint(querySeed, queryCount, queryOffset, dataset.Distribution);
+        string path = TruthPath(directory, queryCount, queryOffset);
         string checkpoint = path + ".partial";
         ScaleTruth? state = File.Exists(path) ? ScaleArtifacts.Read<ScaleTruth>(path) : File.Exists(checkpoint) ? ScaleArtifacts.Read<ScaleTruth>(checkpoint) : null;
-        if (state is not null && (state.DatasetSha256 != dataset.Sha256 || state.QueryCount != queryCount || state.QuerySeed != querySeed || state.ScannedRows < 0 || state.ScannedRows > dataset.Count))
+        if (state is not null && (state.DatasetSha256 != dataset.Sha256 || state.QueryCount != queryCount || state.QuerySeed != querySeed || state.QueryOffset != queryOffset ||
+            (state.QueryFingerprint is not null ? state.QueryFingerprint != fingerprint : queryOffset != 0) || state.ScannedRows < 0 || state.ScannedRows > dataset.Count))
             throw new InvalidDataException("Exact-reference checkpoint does not match the verified dataset/query set.");
         if (state?.ScannedRows == dataset.Count) { Console.Error.WriteLine("Reusing completed exhaustive reference."); return state; }
-        var queries = Enumerable.Range(0, queryCount).Select(i => ScaleAlgorithms.Vector(querySeed, (ulong)i, dataset.Distribution, query: true)).ToArray();
+        var queries = Enumerable.Range(queryOffset, queryCount).Select(i => ScaleAlgorithms.Vector(querySeed, (ulong)i, dataset.Distribution, query: true)).ToArray();
         var norms = queries.Select(ScaleAlgorithms.Norm).ToArray();
         var queues = queries.Select(_ => ScaleAlgorithms.FilterModuli.Select(_ => new ExactTopK()).ToArray()).ToArray();
         if (state is not null)
@@ -143,7 +152,7 @@ public static class ScaleBenchmark
         using var file = new FileStream(Path.Combine(directory, "vectors.f16"), FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan);
         long next = state?.ScannedRows ?? 0; file.Position = next * ScaleAlgorithms.BytesPerVector;
         var bytes = new byte[ScaleAlgorithms.BytesPerVector]; var vector = new float[ScaleAlgorithms.Dimensions];
-        ScaleTruth Snapshot(long rows) => new(dataset.Sha256!, queryCount, querySeed, rows, previousElapsed + timer.Elapsed.TotalMilliseconds, queues.Select(q => q.Select(f => f.Results()).ToArray()).ToArray());
+        ScaleTruth Snapshot(long rows) => new(dataset.Sha256!, queryCount, querySeed, rows, previousElapsed + timer.Elapsed.TotalMilliseconds, queues.Select(q => q.Select(f => f.Results()).ToArray()).ToArray(), queryOffset, fingerprint);
         try
         {
             for (long row = next; row < dataset.Count; row++)
@@ -169,12 +178,13 @@ public static class ScaleBenchmark
         return state;
     }
 
-    private static async Task<JsonElement> RunMeasurementAsync(string directory, string mode, int queryCount, int candidateCount, CancellationToken token)
+    private static async Task<JsonElement> RunMeasurementAsync(string directory, string mode, int queryCount, int candidateCount, int searchExpansion, int queryOffset, CancellationToken token)
     {
         string output = Path.Combine(directory, $"measurement-{mode}-q{queryCount}-{Guid.NewGuid():N}.json");
         var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "dotnet", StringComparison.OrdinalIgnoreCase)) start.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
-        foreach (string argument in new[] { "--scale-measure", directory, "--index-mode", mode, "--query-count", queryCount.ToString(), "--candidate-count", candidateCount.ToString(), "--output", output }) start.ArgumentList.Add(argument);
+        foreach (string argument in new[] { "--scale-measure", directory, "--index-mode", mode, "--query-count", queryCount.ToString(), "--candidate-count", candidateCount.ToString(),
+            "--search-expansion", searchExpansion.ToString(), "--query-offset", queryOffset.ToString(), "--output", output }) start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Cannot start isolated measurement process.");
         Task forward = Task.Run(async () => { while (await process.StandardError.ReadLineAsync(token) is { } line) Console.Error.WriteLine(line); }, token);
         Task<string> stdout = process.StandardOutput.ReadToEndAsync(token);
@@ -192,11 +202,14 @@ public static class ScaleBenchmark
             var dataset = ScaleArtifacts.Validate(directory);
             int count = int.Parse(Option(args, "--query-count")!);
             int candidateCount = int.Parse(Option(args, "--candidate-count")!);
+            int searchExpansion = int.Parse(Option(args, "--search-expansion") ?? "128");
+            int queryOffset = int.Parse(Option(args, "--query-offset") ?? "0");
             string mode = Option(args, "--index-mode")!;
             if (mode is not ("mapped" or "loaded") || dataset.Count != dataset.CommittedRows) throw new InvalidDataException("Invalid measurement arguments.");
-            var truth = ScaleArtifacts.Read<ScaleTruth>(TruthPath(directory, count));
-            if (truth.DatasetSha256 != dataset.Sha256 || truth.ScannedRows != dataset.Count || truth.QueryCount != count) throw new InvalidDataException("Measurement exact-reference mismatch.");
-            var queries = Enumerable.Range(0, count).Select(q => ScaleAlgorithms.Vector(truth.QuerySeed, (ulong)q, dataset.Distribution, query: true)).ToArray();
+            var truth = ScaleArtifacts.Read<ScaleTruth>(TruthPath(directory, count, queryOffset));
+            if (truth.DatasetSha256 != dataset.Sha256 || truth.ScannedRows != dataset.Count || truth.QueryCount != count || truth.QueryOffset != queryOffset ||
+                (truth.QueryFingerprint is not null && truth.QueryFingerprint != QueryFingerprint(truth.QuerySeed, count, queryOffset, dataset.Distribution))) throw new InvalidDataException("Measurement exact-reference mismatch.");
+            var queries = Enumerable.Range(queryOffset, count).Select(q => ScaleAlgorithms.Vector(truth.QuerySeed, (ulong)q, dataset.Distribution, query: true)).ToArray();
             _ = new RuntimePaths(AppContext.BaseDirectory);
             using var memory = new ScaleMemoryMonitor();
             var baseline = memory.Snapshot(); var timer = Stopwatch.StartNew();
@@ -212,7 +225,7 @@ public static class ScaleBenchmark
                 double? firstMs = null;
                 for (int q = 0; q < queries.Length; q++)
                 {
-                    timer.Restart(); var candidates = index.Search(queries[q], candidateCount, allowed); var actual = candidates.Take(ScaleAlgorithms.TopK).ToArray(); double elapsed = timer.Elapsed.TotalMilliseconds;
+                    timer.Restart(); var candidates = index.Search(queries[q], candidateCount, allowed, searchExpansion); var actual = candidates.Take(ScaleAlgorithms.TopK).ToArray(); double elapsed = timer.Elapsed.TotalMilliseconds;
                     var expected = truth.Neighbors[q][f].Select(n => n.Key).ToHashSet();
                     int hits = actual.Select(n => n.Key).Distinct().Count(expected.Contains);
                     double recall = expected.Count == 0 ? 1 : (double)hits / expected.Count;
@@ -220,7 +233,7 @@ public static class ScaleBenchmark
                     if (!valid) throw new InvalidDataException("Native retrieval returned invalid, duplicate, or disallowed keys.");
                     if (q == 0) firstMs = elapsed; else durations.Add(elapsed);
                     recalls.Add(recall);
-                    perQuery.Add(new { queryId = q, elapsedMs = elapsed, recallAt50 = recall, expectedCount = expected.Count, actualCount = actual.Length, candidateCount = candidates.Count, correctCount = hits });
+                    perQuery.Add(new { queryId = queryOffset + q, elapsedMs = elapsed, recallAt50 = recall, expectedCount = expected.Count, actualCount = actual.Length, candidateCount = candidates.Count, correctCount = hits });
                 }
                 double mean = recalls.Average(); pass &= mean >= .95;
                 var memoryAfter = memory.Snapshot();

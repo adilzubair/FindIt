@@ -11,6 +11,9 @@ namespace FindIt.Core;
 
 public sealed partial class ArchiveService
 {
+    // Frozen from the 100k tuning split; see docs/search-next-validation.md.
+    // Returned candidates remain bounded independently of graph exploration.
+    internal const int SemanticSearchExpansion = 8192;
     private readonly SemaphoreSlim searchGate = new(1, 1);
     private NativeVectorIndex? nativeIndex;
     private NativeVectorIndex? nativeDeltaIndex;
@@ -27,12 +30,15 @@ public sealed partial class ArchiveService
         {
             var watch = Stopwatch.StartNew();
             var generation = await storage.RecoverAsync(cancellationToken);
-            if (generation is null) return new SearchResponse { Notice = storage.RecoveryNotice ?? "Prepare this drive to start searching." };
+            if (generation is null) return new SearchResponse { RestartRequired = request.Cursor is not null, Notice = storage.RecoveryNotice ?? "Prepare this drive to start searching." };
             if (request.GenerationId is long expected && expected != generation.GenerationId)
-                return new SearchResponse { GenerationId = generation.GenerationId, Notice = "The archive generation changed. Run the search again." };
+                return RestartSearch(generation.GenerationId, "The archive generation changed. Run the search again.");
+            if (request.Query.Length > 4096) throw new ArgumentException("Use at most 4,096 characters in a search.");
             using var db = ArchiveDatabase.Open(storage.CatalogPath(generation), true);
             bool overlayExists = File.Exists(storage.OverlayPath);
             if (overlayExists) AttachOverlay(db);
+            string revision = ReadSearchRevision();
+            if (overlayExists != (revision != "missing")) return RestartSearch(generation.GenerationId, "People metadata changed. Run the search again.");
             var people = await ReadPeopleAsync(false, cancellationToken);
             string query = request.Query.Trim();
             var detected = new List<PersonRecord>();
@@ -50,23 +56,48 @@ public sealed partial class ArchiveService
                 query = Regex.Replace(query, pattern, " ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             }
             query = Regex.Replace(query, @"\s+", " ").Trim();
-            var personIds = request.Filters.PersonIds.Concat(detected.Select(p => p.Id)).Distinct().ToArray();
+            var personIds = request.Filters.PersonIds.Concat(detected.Select(p => p.Id)).Distinct().Order().ToArray();
             if (personIds.Length > 32) throw new ArgumentException("Choose at most 32 people in one search.");
             var predicates = BuildPredicates(request.Filters, personIds, overlayExists);
             int limit = Math.Clamp(request.Limit, 1, 1000);
-            int offset = ParseCursor(request.Cursor, generation.GenerationId, query, request.Filters);
-            int candidates = (int)Math.Min(16384, Math.Max(512, ((long)offset + limit) * 4));
+            int candidates = Math.Clamp(request.RetrievalBudget ?? Math.Max(512, limit * 4), 512, 16384);
+            string binding = ArchiveStorage.HashText(JsonSerializer.Serialize(new {
+                generation.LibraryId, generation.GenerationId, generation.EmbeddingFingerprint,
+                queryEncoder = embeddings.Fingerprint, encoderAvailable = embeddings.Available,
+                submittedQuery = Regex.Replace(request.Query.Trim(), @"\s+", " "), query,
+                predicates.Sql, parameters = predicates.Parameters.Select(p => new { p.Name, p.Value }),
+                request.Filters.ExactOnly, people = personIds.Order(), revision, limit, candidates, searchExpansion = SemanticSearchExpansion
+            }, WireJson.Options));
+            int offset = 0;
+            if (request.Cursor is not null)
+            {
+                if (query.Length == 0)
+                {
+                    if (!TryBrowseCursor(request.Cursor, binding, out offset)) return RestartSearch(generation.GenerationId);
+                }
+                else
+                {
+                    if (!TrySessionCursor(request.Cursor, out var sessionId, out offset)) return RestartSearch(generation.GenerationId);
+                    var session = searchSessions.Find(sessionId, binding);
+                    if (session is null || offset >= session.Files.Length && offset != 0) return RestartSearch(generation.GenerationId);
+                    var continuation = SessionPage(db, session, generation.GenerationId, people, offset, limit, watch, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return ReadSearchRevision() == revision ? continuation : RestartSearch(generation.GenerationId, "People metadata changed. Run the search again.");
+                }
+            }
             var ranks = new Dictionary<long, RankedSegment>();
+            bool canSearchDeeper = false;
             var lexical = LexicalTerms(query);
             var tokens = lexical.Select(t => t.Text).ToArray();
             string match = string.Join(request.Filters.ExactOnly ? " AND " : " OR ", lexical.Select(t => "\"" + t.Text.Replace("\"", "\"\"") + "\"" + (t.Phrase ? "" : "*")));
             if (!string.IsNullOrWhiteSpace(match))
             {
                 using var command = db.CreateCommand();
-                command.CommandText = $"SELECT s.id,bm25(search_fts,0,0,5,2,1) FROM search_fts JOIN segments s ON s.id=CAST(search_fts.segment_id AS INTEGER) JOIN files f ON f.id=s.file_id WHERE search_fts MATCH $match AND {predicates.Sql} ORDER BY 2 LIMIT $limit;";
+                command.CommandText = $"SELECT s.id,bm25(search_fts,0,0,5,2,1) FROM search_fts JOIN segments s ON s.id=CAST(search_fts.segment_id AS INTEGER) JOIN files f ON f.id=s.file_id WHERE search_fts MATCH $match AND {predicates.Sql} ORDER BY 2,s.id LIMIT $limit;";
                 command.Parameters.AddWithValue("$match", match); command.Parameters.AddWithValue("$limit", candidates); AddParameters(command, predicates.Parameters);
                 using var reader = command.ExecuteReader(); int rank = 0;
                 while (reader.Read()) { var id = reader.GetInt64(0); ranks[id] = new RankedSegment(id) { Score = 1.0 / (60 + ++rank), Exact = true }; }
+                canSearchDeeper |= rank == candidates;
             }
             if (query.Length > 0)
             {
@@ -76,6 +107,7 @@ public sealed partial class ArchiveService
                 filename.Parameters.AddWithValue("$path", "%" + EscapeLike(query) + "%"); filename.Parameters.AddWithValue("$limit", candidates); AddParameters(filename, predicates.Parameters);
                 using var files = filename.ExecuteReader(); int rank = 0;
                 while (files.Read()) { long id = files.GetInt64(0); if (!ranks.TryGetValue(id, out var item)) ranks[id] = item = new RankedSegment(id); item.Score += 2.0 / (60 + ++rank); item.Exact = true; }
+                canSearchDeeper |= rank == candidates;
             }
             bool semanticUsed = false; string notice = "";
             try
@@ -114,11 +146,12 @@ public sealed partial class ArchiveService
                             if (nativeIndex is not null)
                             {
                                 var accepted = allowed ?? liveVectorIds;
-                                neighbors = nativeIndex.Search(vector, candidates, accepted)
-                                    .Concat(nativeDeltaIndex?.Search(vector, candidates, accepted) ?? [])
+                                neighbors = nativeIndex.Search(vector, candidates, accepted, SemanticSearchExpansion)
+                                    .Concat(nativeDeltaIndex?.Search(vector, candidates, accepted, SemanticSearchExpansion) ?? [])
                                     .GroupBy(n => n.Key).Select(g => g.MinBy(n => n.Distance)!)
                                     .OrderBy(n => n.Distance).Take(candidates)
                                     .Select(n => ((long)n.Key, 1.0 - n.Distance)).ToArray();
+                                if (neighbors.Count == 0) notice = "Approximate search can miss matches. Try different words or a narrower filter.";
                             }
                             else
                             {
@@ -132,6 +165,7 @@ public sealed partial class ArchiveService
                             if (!ranks.TryGetValue(neighbor.Id, out var item)) ranks[neighbor.Id] = item = new RankedSegment(neighbor.Id);
                             item.Score += 1.0 / (60 + ++rank); item.Semantic = true;
                         }
+                        canSearchDeeper |= neighbors.Count == candidates;
                         semanticUsed = true;
                     }
                     else notice = "The local encoder could not embed this query. Keyword results are shown.";
@@ -152,30 +186,28 @@ public sealed partial class ArchiveService
                 using var reader = browse.ExecuteReader(); int rank = 0;
                 while (reader.Read()) { var id = reader.GetInt64(0); ranks[id] = new RankedSegment(id) { Score = 1.0 / (60 + ++rank) }; }
             }
-            var grouped = new Dictionary<Guid, MutableResult>();
-            foreach (var item in ranks.Values.OrderByDescending(i => i.Score))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                using var command = db.CreateCommand();
-                command.CommandText = "SELECT f.id,f.path,f.kind,f.bytes,f.modified,s.id,s.kind,s.text,s.start_ms,s.end_ms,s.page,s.thumbnail FROM segments s JOIN files f ON f.id=s.file_id WHERE s.id=$id;"; command.Parameters.AddWithValue("$id", item.Id);
-                using var reader = command.ExecuteReader(); if (!reader.Read()) continue;
-                var fileId = Guid.Parse(reader.GetString(0));
-                var moment = ReadMoment(reader, 5);
-                if (!grouped.TryGetValue(fileId, out var result))
-                {
-                    string path = reader.GetString(1);
-                    var kind = (FileKind)reader.GetInt32(2);
-                    var category = personIds.Length > 0 && query.Length > 0 && (kind is FileKind.Image or FileKind.Video) ? MatchCategory.PossiblePersonAction : item.Exact ? MatchCategory.Exact : item.Semantic ? MatchCategory.Semantic : MatchCategory.Browse;
-                    grouped[fileId] = result = new MutableResult(new SearchResult { FileId = fileId, RelativePath = path, Name = Path.GetFileName(path), Kind = kind, Bytes = reader.GetInt64(3), ModifiedUtc = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture), Thumbnail = moment.Thumbnail, Snippet = Snippet(moment.Text, tokens), MatchCategory = category, Score = item.Score, MatchingPeople = people.Where(p => personIds.Contains(p.Id)).Select(p => p.Name).ToArray(), MatchedPersonIds = personIds });
-                }
-                if (result.Moments.Count < 12) result.Moments.Add(moment);
-            }
-            var ordered = grouped.Values.OrderByDescending(p => p.Result.Score).ThenBy(p => p.Result.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray();
-            int localOffset = query.Length == 0 ? 0 : offset;
-            var results = ordered.Skip(localOffset).Take(limit).Select(p => DecoratePersonResult(db, p.Result with { Moments = p.Moments.OrderBy(m => m.StartMs ?? 0).ThenBy(m => m.Page ?? 0).ToArray() }, personIds)).Where(r => r.Moments.Count > 0).ToArray();
+            var ordered = FreezeSearchFiles(db, ranks.Values, cancellationToken);
             if (ambiguous.Count > 0) notice = $"Multiple people use the name {string.Join(", ", ambiguous.Distinct(StringComparer.OrdinalIgnoreCase))}. Select a person filter to resolve the name. " + notice;
-            if (results.Any(r => r.MatchCategory == MatchCategory.PossiblePersonAction)) notice = string.Join(" ", new[] { notice, "A sampled face falls within this scene or passage. Check the face and surrounding footage: action, role and speaker are not verified." }.Where(s => s.Length > 0));
-            return new SearchResponse { GenerationId = generation.GenerationId, Results = results, SemanticUsed = semanticUsed, NextCursor = ordered.Length > localOffset + limit ? MakeCursor(offset + limit, generation.GenerationId, query, request.Filters) : null, TotalCount = null, Notice = notice, ElapsedMilliseconds = watch.Elapsed.TotalMilliseconds, People = detected.Select(p => new PersonChip(p.Id, p.Name)).ToArray() };
+            if (query.Length == 0)
+            {
+                var results = HydrateSearchFiles(db, ordered.Take(limit), tokens, personIds, people, false, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ReadSearchRevision() != revision) return RestartSearch(generation.GenerationId, "People metadata changed. Run the search again.");
+                return new SearchResponse { GenerationId = generation.GenerationId, Results = results,
+                    PageCursor = BrowseCursor(offset, binding), NextCursor = ordered.Length > limit ? BrowseCursor(checked(offset + limit), binding) : null,
+                    Notice = notice, ElapsedMilliseconds = watch.Elapsed.TotalMilliseconds, People = detected.Select(p => new PersonChip(p.Id, p.Name)).ToArray() };
+            }
+            // Leave room for bounded token/name/notice provenance, including unusually long paths/names.
+            long retained = 64 * 1024;
+            var bounded = ordered.TakeWhile(f => (retained += f.EstimatedBytes) <= SearchSessionCache.MaximumBytes).ToArray();
+            var created = new SearchSession { Binding = binding, Files = bounded, Tokens = tokens, PersonIds = personIds,
+                People = detected.Select(p => new PersonChip(p.Id, p.Name)).ToArray(), Notice = notice,
+                SemanticUsed = semanticUsed, CanSearchDeeper = candidates < 16384 && (canSearchDeeper || bounded.Length != ordered.Length), RetrievalBudget = candidates };
+            var response = SessionPage(db, created, generation.GenerationId, people, 0, limit, watch, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ReadSearchRevision() != revision) return RestartSearch(generation.GenerationId, "People metadata changed. Run the search again.");
+            searchSessions.Add(created);
+            return response;
         }
         finally { searchGate.Release(); }
     }
@@ -273,16 +305,7 @@ public sealed partial class ArchiveService
         }
         return result.Distinct().ToArray();
     }
-    private static string MakeCursor(int offset, long generation, string query, SearchFilters filters) => Convert.ToBase64String(Encoding.UTF8.GetBytes($"{offset}|{generation}|{ArchiveStorage.HashText(query + JsonSerializer.Serialize(filters, WireJson.Options))}"));
-    private static int ParseCursor(string? cursor, long generation, string query, SearchFilters filters)
-    {
-        if (cursor is null) return 0;
-        try { var fields = Encoding.UTF8.GetString(Convert.FromBase64String(cursor)).Split('|'); if (fields.Length == 3 && long.Parse(fields[1], CultureInfo.InvariantCulture) == generation && fields[2] == ArchiveStorage.HashText(query + JsonSerializer.Serialize(filters, WireJson.Options))) return Math.Clamp(int.Parse(fields[0], CultureInfo.InvariantCulture), 0, query.Length == 0 ? int.MaxValue - 1000 : 16000); }
-        catch (Exception error) when (error is FormatException or OverflowException) { }
-        return 0;
-    }
     private sealed class RankedSegment(long id) { public long Id { get; } = id; public double Score; public bool Exact; public bool Semantic; }
-    private sealed class MutableResult(SearchResult result) { public SearchResult Result { get; } = result; public List<SearchMoment> Moments { get; } = []; }
 
     public async Task<PreviewResult> GetPreviewAsync(PreviewRequest request, CancellationToken cancellationToken = default)
     {

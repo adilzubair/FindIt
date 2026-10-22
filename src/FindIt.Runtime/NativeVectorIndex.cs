@@ -193,12 +193,17 @@ public sealed unsafe class NativeVectorIndex : IDisposable
             accessor?.Dispose();mm?.Dispose();lease?.Dispose();
         }
     }
-    public IReadOnlyList<VectorNeighbor> Search(ReadOnlySpan<float> query,int limit,IReadOnlySet<ulong>? allowedIds=null)
+    public IReadOnlyList<VectorNeighbor> Search(ReadOnlySpan<float> query,int limit,IReadOnlySet<ulong>? allowedIds=null,int searchExpansion=128)
     {
         Validate(query);limit=Math.Clamp(limit,1,16384);
+        if(searchExpansion is < 1 or > 65536)throw new ArgumentOutOfRangeException(nameof(searchExpansion));
         lock(gate)
         {
-            EnsureOpen();var keys=new ulong[limit];var distances=new float[limit];nuint count;
+            EnsureOpen();
+            // Exploration is independent of returned/hydrated candidates. Reset on every call,
+            // including mapped indexes, so one diagnostic cannot alter later query settings.
+            usearch_change_expansion_search(handle,(nuint)searchExpansion,out var expansionError);Check(expansionError);
+            var keys=new ulong[limit];var distances=new float[limit];nuint count;
             fixed(float* q=query)
             {
                 if(allowedIds is null) count=usearch_search(handle,(IntPtr)q,1,(nuint)limit,keys,distances,out var error1).WithCheck(error1);
@@ -239,6 +244,7 @@ public sealed unsafe class NativeVectorIndex : IDisposable
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern nuint usearch_capacity(IntPtr h,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_reserve(IntPtr h,nuint n,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_change_threads_add(IntPtr h,nuint n,out IntPtr e);
+    [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_change_expansion_search(IntPtr h,nuint n,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)][return:MarshalAs(UnmanagedType.I1)]private static extern bool usearch_contains(IntPtr h,ulong key,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern nuint usearch_get(IntPtr h,ulong key,nuint count,IntPtr vector,int kind,out IntPtr e);
     [DllImport(Dll,CallingConvention=CallingConvention.Cdecl)]private static extern void usearch_add(IntPtr h,ulong key,IntPtr vector,int kind,out IntPtr e);

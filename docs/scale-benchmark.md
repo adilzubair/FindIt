@@ -31,7 +31,9 @@ Options:
 | `--distribution` | `isotropic-512` | `isotropic-512` or `clustered-512` |
 | `--seed` | `42` | Deterministic generator seed |
 | `--query-count` | `64` | Held-out queries, 4–1024; use at least 64 for acceptance runs |
+| `--query-offset` | `0` | First independent query ID; use 256–511 for tuning and 512–767 for untouched evaluation with 256 queries |
 | `--candidate-count` | `512` | Request this many ANN candidates, then evaluate the first 50; 512 matches the production reader's minimum request |
+| `--search-expansion` | `128` | Configured graph exploration, 1–65,536; effective expansion is at least the candidate count; the reader now uses 8,192 |
 | `--build-concurrency` | Minimum of 8 and logical processors | Native graph insertion workers, 1–8; recorded in graph checkpoints and final index metadata |
 | `--index-mode` | `both` | Fresh-process `mapped`, `loaded`, or both |
 | `--output` | Timestamped dataset report | Final JSON report, also printed to standard output |
@@ -54,7 +56,7 @@ The source build locates the bundled `runtime/native/libusearch_c.dll` through t
 - Filters are explicit stable key subsets: all records, `key % 10 == 3`, and `key % 100 == 17`. Expected filtered results are computed from their complete eligible sets, not by filtering a short global result list. Key filters can correlate with synthetic clusters; the exact reference includes that effect.
 - Recall@50 is the fraction of exact top-50 keys present in the first 50 ANN results. If fewer than 50 records are eligible, the denominator is the exact eligible result count. The report includes every query's expected/actual/hit counts, mean recall, and worst query recall.
 
-The default graph configuration is the application's pinned cosine/FP16, connectivity 16, insertion expansion 128, and search expansion 128. USearch may increase effective expansion to satisfy a larger candidate request. The native DLL SHA-256 and candidate count are recorded. This runner does not tune parameters against the test queries.
+Graph construction retains the pinned cosine/FP16, connectivity 16 and insertion expansion 128. The runner defaults to search expansion 128 to reproduce historical baselines; each search explicitly configures its requested expansion independently of returned candidates, including on mapped graphs. The production reader uses 8,192 after the [separate tuning/evaluation](search-next-validation.md). USearch increases effective expansion when a larger candidate request requires it. Reports record native DLL/graph SHA-256, candidate count, configured/effective expansion, query offset and query fingerprint. The caller must separate tuning and untouched evaluation; the runner does not select parameters automatically.
 
 New benchmark graphs use bounded parallel insertion, with at most eight workers and 1,024 vectors per batch. The native index reserves the complete corpus capacity before parallel insertion. An exclusive managed gate prevents search, save, reserve, or disposal while workers are active; every native insertion receives a separate error pointer. All workers join before the completed canonical prefix advances. Inputs are checked for finite values and duplicate keys before mutation. A native batch failure poisons its in-memory handle, preventing search, save, or continuation; resumption reloads the last durable checkpoint instead of saving a partial batch.
 
@@ -84,7 +86,7 @@ At one million records the canonical FP16 file is 1.024 GB. The graph index adds
 
 The runner creates `scale-v1-<distribution>-<count>-<seed>` under the chosen artifacts root. It refuses an existing child without its ownership marker, wrong markers, directory/file links, mismatched dataset identities, or checksum corruption. It does not open or clear an archive. An exclusive lease prevents two parent runs from modifying the same dataset.
 
-Canonical data is flushed every 8,192 rows before publishing its checkpoint and prefix hash. On resume, the committed prefix is checksum-verified; only an owned uncommitted tail can be truncated. Exact-reference queues checkpoint every 65,536 rows and on cooperative cancellation. Completed reference data is reused for the same dataset/query set.
+Canonical data is flushed every 8,192 rows before publishing its checkpoint and prefix hash. On resume, the committed prefix is checksum-verified; only an owned uncommitted tail can be truncated. Exact-reference queues checkpoint every 65,536 rows and on cooperative cancellation. Completed reference data is reused for the same dataset/query set. Nonzero offsets use separate `truth-q<count>-offset<offset>.json` files whose fingerprints bind generator version, query domain, seed, count, offset and distribution. Legacy zero-offset truth files remain readable; tuning/evaluation never overwrites them.
 
 A native build saves a flushed, token-named graph checkpoint every **50,000 inserted rows**. Its atomically replaced pointer records the current and previous graph, row counts, checksums, dataset/DLL identities, dimensions, insertion/search settings, and cumulative build time. The previous graph is retained until its replacement pointer has been published. Cleanup is restricted to the benchmark's exact token filename convention inside its owned dataset directory.
 
