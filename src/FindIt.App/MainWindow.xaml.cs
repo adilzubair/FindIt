@@ -79,7 +79,9 @@ public partial class MainWindow : Window
         DriveLocation.Text = _root;
         ShortcutList.ItemsSource = new ShortcutEntry[] { new("Search", "Ctrl K"), new("Search for what you typed", "Enter"), new("Move between files", "Arrow keys"), new("Open the selected file", "Ctrl Enter"), new("Close the preview or a person", "Esc") };
         BuildStageStrip(); BuildSuggestions();
-        _statusTimer.Tick += async (_, _) => await RefreshStatusAsync();
+        // Nobody sees a minimized window; restoring it refreshes at once.
+        _statusTimer.Tick += async (_, _) => { if (WindowState != WindowState.Minimized) await RefreshStatusAsync(); };
+        _progressTimer.Tick += (_, _) => ShowPendingProgress();
         Loaded += async (_, _) => await InitializeAsync();
     }
 
@@ -93,6 +95,7 @@ public partial class MainWindow : Window
         if (_backend is null) { FooterStatus.Text = "Opening archive…"; EmptyTitle.Text = "Opening your archive"; EmptyDescription.Text = "Reading the library on this drive. Your files will appear here shortly."; EmptyAction.IsEnabled = false; StartPreparationButton.IsEnabled = false; return; }
         StartPreparationButton.IsEnabled = true;
         await RefreshStatusAsync();
+        RestoreDrivePreferences();
         await LoadPeopleAsync();
         _initialized = true;
         _statusTimer.Start();
@@ -210,6 +213,21 @@ public partial class MainWindow : Window
         }
     }
 
+    // Recent searches travel with the drive. A read-only or busy drive only loses this convenience.
+    private async Task SaveRecentQueriesAsync()
+    {
+        if (_backend is null || _closing) return;
+        try { await _backend.SaveRecentQueriesAsync(_recentQueries.ToArray()); }
+        catch (Exception ex) { Debug.WriteLine(ex); }
+    }
+    // Folders and recent searches saved on this drive, applied when its library first opens.
+    private void RestoreDrivePreferences()
+    {
+        if (_recentQueries.Count == 0 && _status.RecentQueries.Count > 0) { _recentQueries.AddRange(_status.RecentQueries.Take(6)); BuildSuggestions(); }
+        if (_preparationFolders.Count == 0 && !_preparationUiBusy)
+            foreach (var folder in _status.PreparationFolders) _preparationFolders.Add(folder.Replace('/', Path.DirectorySeparatorChar));
+    }
+
     private async Task RefreshStatusAsync()
     {
         if (_backend is null || _statusPolling || _closing) return;
@@ -219,13 +237,15 @@ public partial class MainWindow : Window
             var previousLibrary = _status.LibraryId;
             var wasConnected = _status.Connected;
             var wasSemantic = _status.SemanticAvailable;
-            _status = Directory.Exists(_root) ? await _backend.GetStatusAsync() : _status with { Connected = false, StatusDetail = "Drive disconnected." };
+            // A sleeping or removed drive can block this check for seconds; keep it off the UI thread.
+            _status = await Task.Run(() => Directory.Exists(_root)) ? await _backend.GetStatusAsync() : _status with { Connected = false, StatusDetail = "Drive disconnected." };
             if (previousLibrary != Guid.Empty && _status.LibraryId != Guid.Empty && previousLibrary != _status.LibraryId)
             {
-                _searchCancellation?.Cancel(); ClosePreview(); CurrentTiles.Clear(); Rows.Clear(); _searchGeneration = null;
+                _searchCancellation?.Cancel(); ClosePreview(); CurrentTiles.Clear(); Rows.Clear(); _searchGeneration = null; _thumbnails.ReleaseFiles();
                 _pages.Clear(); _pageLru.Clear(); _pageCursors.Clear(); _pageCursors.Add(null); _page = 0;
                 _boundedSearch = false; SearchMoreButton.Visibility = Visibility.Collapsed;
                 var initialized = _initialized; _initialized = false; PersonFilter.SelectedIndex = 0; _initialized = initialized; CaptureFilterState(); UpdateFilterUi();
+                _recentQueries.Clear(); if (!_preparationUiBusy) _preparationFolders.Clear(); RestoreDrivePreferences(); BuildSuggestions();
                 await LoadPeopleAsync();
                 Notice("A different archive is connected. Run your search to see this drive's files. Reopen a person before editing their details.");
             }
@@ -241,19 +261,23 @@ public partial class MainWindow : Window
             FolderEmpty.Visibility = _status.Folders.Count == 0 && FolderPane.IsVisible ? Visibility.Visible : Visibility.Collapsed;
             PreparedFoldersCard.Visibility = _status.Folders.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             AllFoldersCount.Text = $"{_status.FileCount:N0}";
-            CapabilitiesList.ItemsSource = _status.Capabilities;
-            IssuesList.ItemsSource = _status.Issues;
+            // Rebinding resets scrolling and open dropdowns, so lists change only when their contents do.
+            if (CapabilitiesList.ItemsSource is not IEnumerable<RuntimeCapability> capabilities || !capabilities.SequenceEqual(_status.Capabilities)) CapabilitiesList.ItemsSource = _status.Capabilities;
+            if (IssuesList.ItemsSource is not IEnumerable<ArchiveIssue> issues || !issues.SequenceEqual(_status.Issues)) IssuesList.ItemsSource = _status.Issues;
             IssuesHeading.Text = _status.Issues.Count == 0 ? "No files need attention" : $"{_status.Issues.Count:N0} file{(_status.Issues.Count == 1 ? " needs" : "s need")} attention";
             var selectedFolder = (FolderFilter.SelectedItem as FolderChoice)?.Path ?? _filters.Folder;
-            _initialized = false;
             var choices = new[] { new FolderChoice("All folders", null) }.Concat(_status.Folders.Select(f => new FolderChoice(f.RelativePath, f.RelativePath))).ToArray();
             if (selectedFolder is not null && !choices.Any(f => f.Path == selectedFolder)) choices = choices.Append(new FolderChoice(selectedFolder, selectedFolder)).ToArray();
-            FolderFilter.ItemsSource = choices; FolderFilter.SelectedItem = choices.FirstOrDefault(f => f.Path == selectedFolder) ?? choices[0];
-            _initialized = true;
+            if (FolderFilter.ItemsSource is not FolderChoice[] shown || !shown.SequenceEqual(choices))
+            {
+                _initialized = false;
+                FolderFilter.ItemsSource = choices; FolderFilter.SelectedItem = choices.FirstOrDefault(f => f.Path == selectedFolder) ?? choices[0];
+                _initialized = true;
+            }
             if (!_status.Connected)
             {
                 StopPlayback(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel();
-                Notice("Drive disconnected. Reconnect the same drive to continue. Your query is preserved.");
+                _thumbnails.ReleaseFiles(); Notice("Drive disconnected. Reconnect the same drive to continue. Your query is preserved.");
             }
             else if (_status.IsPreparing) Notice("Preparation is running. Search currently prepared files while the rest are processed.", false);
             else if (_status.FileCount > 0 && !_status.SemanticAvailable) Notice("Search by meaning is unavailable on this PC. You can still search file names and exact words. See Drive for details.", false);
@@ -308,27 +332,63 @@ public partial class MainWindow : Window
 
     private SearchFilters ReadFilters() => _filters.ToSearchFilters(DateTimeOffset.Now, TimeZoneInfo.Local);
 
-    private async Task SearchAsync(bool reset, int? targetPage = null, bool submitQuery = false, bool deepen = false)
+    // Results arrive in pages of 256. Scrolling near the end appends the next page, up to
+    // AutoLoadedPages at once; Previous and Next then move past what is loaded.
+    private const int PageSize = 256, AutoLoadedPages = 16;
+    private int _firstPage;
+    private CancellationTokenSource? _appendCancellation;
+    private long _loadMoreFailedAt;
+    private bool CanLoadMore => !_searching && !_closing && _backend is not null && _page - _firstPage + 1 < AutoLoadedPages
+        && _pageCursors.Count > _page + 1 && (_loadMoreFailedAt == 0 || Stopwatch.GetElapsedTime(_loadMoreFailedAt) > TimeSpan.FromSeconds(5));
+    private async Task LoadMoreAsync() { if (CanLoadMore) await SearchAsync(false, append: true); }
+    private async void ResultsScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (_backend is null || _closing) return;
+        // The list's column header has its own scroll viewer; only the outer one shows results.
+        if (sender is DependencyObject owner && e.OriginalSource is ScrollViewer scroll && ReferenceEquals(scroll, VisualChildren<ScrollViewer>(owner).FirstOrDefault()) && NearEnd(scroll)) await LoadMoreAsync();
+    }
+
+    private async Task SearchAsync(bool reset, int? targetPage = null, bool submitQuery = false, bool deepen = false, bool append = false, bool keepPreview = false)
+    {
+        if (await SearchPageAsync(reset, targetPage, submitQuery, deepen, append, keepPreview, restartSilently: true) is int restoreCount and > 0)
+        {
+            // Preparation publishing new files, a people correction or an expired session
+            // invalidates the ranked window. Run the same search again, once, where the user was.
+            await SearchPageAsync(true, null, false, true, false, true, restartSilently: false);
+            while (CurrentTiles.Count > 0 && CurrentTiles.Count < restoreCount && CanLoadMore) await SearchPageAsync(false, null, false, false, true, true, restartSilently: false);
+            Notice("The library changed while you were searching, so the results were refreshed.", false);
+        }
+        else if (!_closing) _ = Dispatcher.BeginInvoke(async () => { if (GalleryNeedsMore()) await LoadMoreAsync(); }, DispatcherPriority.Loaded);
+    }
+    /// <returns>When the worker asked for a restart that should happen silently, how many results were shown.</returns>
+    private async Task<int> SearchPageAsync(bool reset, int? targetPage, bool submitQuery, bool deepen, bool append, bool keepPreview, bool restartSilently)
+    {
+        if (_backend is null || _closing) return 0;
         CaptureFilterState();
-        if (_filters.ValidateDateRange() is { } validation) { Notice(validation); return; }
+        if (_filters.ValidateDateRange() is { } validation) { Notice(validation); return 0; }
         UpdateFilterUi();
-        _searchCancellation?.Cancel(); _searchCancellation?.Dispose();
-        var cancellation = _searchCancellation = new();
+        CancellationTokenSource cancellation;
+        // An appended page must not cancel the thumbnails of the pages already shown.
+        if (append) cancellation = _appendCancellation = CancellationTokenSource.CreateLinkedTokenSource(_searchCancellation?.Token ?? CancellationToken.None);
+        else { _appendCancellation = null; _searchCancellation?.Cancel(); _searchCancellation?.Dispose(); cancellation = _searchCancellation = new(); }
         if (reset)
         {
             if (!deepen) _searchBudget = null;
             _boundedSearch = false;
-            _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null; ClosePreview();
+            _page = _firstPage = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null; _loadMoreFailedAt = 0;
+            if (!keepPreview) ClosePreview();
             if (submitQuery) _submittedQuery = QueryBox.Text.Trim();
             _submittedFilters = ReadFilters();
-            if (submitQuery && _submittedQuery.Length > 0) { _recentQueries.Remove(_submittedQuery); _recentQueries.Insert(0, _submittedQuery); if (_recentQueries.Count > 6) _recentQueries.RemoveAt(6); BuildSuggestions(); }
+            if (submitQuery && _submittedQuery.Length > 0 && !string.Equals(_recentQueries.FirstOrDefault(), _submittedQuery, StringComparison.Ordinal))
+            {
+                _recentQueries.RemoveAll(q => string.Equals(q, _submittedQuery, StringComparison.OrdinalIgnoreCase)); _recentQueries.Insert(0, _submittedQuery); if (_recentQueries.Count > 6) _recentQueries.RemoveAt(6); BuildSuggestions();
+                _ = SaveRecentQueriesAsync();
+            }
             UpdateSearchMode();
         }
-        var requestedPage = targetPage ?? _page;
+        var requestedPage = append ? _page + 1 : targetPage ?? _page;
         _searchError = null;
-        _searching = true; SearchProgress.Visibility = Visibility.Visible; ResultCount.Text = "Searching…";
+        _searching = true; SearchProgress.Visibility = Visibility.Visible;
+        if (!append) ResultCount.Text = "Searching…";
         PreviousPageButton.IsEnabled = NextPageButton.IsEnabled = false;
         SearchMoreButton.IsEnabled = false;
         if (CurrentTiles.Count == 0) UpdateEmptyState();
@@ -336,17 +396,18 @@ public partial class MainWindow : Window
         {
             // Even a previously viewed page validates its worker session. Cached page
             // metadata must not bypass expiry, generation changes or people corrections.
-            var response = await _backend.SearchAsync(new() { Query = _submittedQuery, Filters = _submittedFilters, Limit = 256,
+            var response = await _backend.SearchAsync(new() { Query = _submittedQuery, Filters = _submittedFilters, Limit = PageSize,
                 Cursor = _pageCursors.ElementAtOrDefault(requestedPage), GenerationId = _searchGeneration, RetrievalBudget = _searchBudget }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (response.RestartRequired)
             {
-                _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null;
+                if (restartSilently && response.GenerationId > 0) return Math.Max(CurrentTiles.Count, PageSize);
+                _page = _firstPage = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null;
                 ClosePreview(); CurrentTiles.Clear(); Rows.Clear();
                 _searchError = string.IsNullOrWhiteSpace(response.Notice) ? "Run the search again." : response.Notice;
                 ResultCount.Text = "Search needs restarting"; Notice(_searchError);
                 SearchMoreButton.Visibility = Visibility.Collapsed;
-                return;
+                return 0;
             }
             _searchGeneration = response.GenerationId;
             _boundedSearch = response.IsBoundedWindow;
@@ -355,28 +416,33 @@ public partial class MainWindow : Window
             _pages[requestedPage] = response;
             while (_pages.Count > 8 && _pageLru.TryDequeue(out var oldest)) _pages.Remove(oldest);
             if (response.NextCursor is not null && _pageCursors.Count == requestedPage + 1) _pageCursors.Add(response.NextCursor);
-            if (_page != requestedPage) ClosePreview();
-            _page = requestedPage;
-            CurrentTiles.Clear();
-            foreach (var result in response.Results) CurrentTiles.Add(new ResultTile { Result = result });
-            ArrangeRows(true); GalleryScrollToTop();
+            if (append) _page = requestedPage;
+            else
+            {
+                if (_page != requestedPage || _firstPage != requestedPage) ClosePreview();
+                _page = _firstPage = requestedPage;
+                CurrentTiles.Clear();
+            }
+            foreach (var result in response.Results) CurrentTiles.Add(new ResultTile { Result = result, IsSelected = result.FileId == _selectedResult?.FileId });
+            ArrangeRows(true);
+            if (!append && !keepPreview) GalleryScrollToTop();
             if (_page == 0 && IsBrowsing && HasNoFilters)
             {
                 RecentTiles.Clear();
                 foreach (var result in response.Results.Take(12)) RecentTiles.Add(new ResultTile { Result = result, TileWidth = 148, ThumbnailHeight = 111 });
             }
             EmptyState.Visibility = CurrentTiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            var first = _page * 256 + 1; var last = _page * 256 + CurrentTiles.Count;
+            var first = _firstPage * PageSize + 1; var last = _firstPage * PageSize + CurrentTiles.Count;
             ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")}{(response.NextCursor is not null && response.TotalCount is null ? " · More results available" : "")}";
             if (response.IsBoundedWindow) ResultCount.Text += " · Closest matches";
             UpdateSearchMode();
             SearchMoreButton.Visibility = response.CanSearchDeeper ? Visibility.Visible : Visibility.Collapsed;
             SearchMoreButton.IsEnabled = response.CanSearchDeeper;
             SearchMoreButton.Tag = response.RetrievalBudget;
-            PreviousPageButton.IsEnabled = _page > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
+            PreviousPageButton.IsEnabled = _firstPage > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
             // Person evidence is qualified beside the results and in the preview, so the
             // worker's matching caveat is not repeated in the page-wide notice.
-            _hasPersonEvidence = response.Results.Any(r => r.MatchCategory == MatchCategory.PossiblePersonAction || r.Moments.Any(m => m.PersonEvidence.Count > 0));
+            _hasPersonEvidence = CurrentTiles.Any(t => t.Result.MatchCategory == MatchCategory.PossiblePersonAction || t.Result.Moments.Any(m => m.PersonEvidence.Count > 0));
             var notice = response.Notice?.Replace(PersonEvidenceNotice, "", StringComparison.Ordinal).Trim();
             if (!string.IsNullOrWhiteSpace(notice)) Notice(notice); else if (!_status.IsPreparing) HideNotice(true);
             UpdateSearchMode();
@@ -394,22 +460,34 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    PreviousPageButton.IsEnabled = _page > 0;
+                    if (append) _loadMoreFailedAt = Stopwatch.GetTimestamp();
+                    PreviousPageButton.IsEnabled = _firstPage > 0;
                     NextPageButton.IsEnabled = _pages.TryGetValue(_page, out var visiblePage) && visiblePage.NextCursor is not null;
                     SearchMoreButton.IsEnabled = visiblePage?.CanSearchDeeper == true;
-                    ResultCount.Text = $"Page {_page + 1:N0} · Could not load that page. Try again.";
+                    if (!append) ResultCount.Text = $"Page {_page + 1:N0} · Could not load that page. Try again.";
                 }
             }
         }
         finally
         {
-            if (ReferenceEquals(cancellation, _searchCancellation))
+            if (append ? ReferenceEquals(cancellation, _appendCancellation) : ReferenceEquals(cancellation, _searchCancellation))
             {
                 _searching = false; SearchProgress.Visibility = Visibility.Collapsed;
                 if (CurrentTiles.Count == 0) UpdateEmptyState();
             }
+            if (append) { if (ReferenceEquals(cancellation, _appendCancellation)) _appendCancellation = null; cancellation.Dispose(); }
         }
+        return 0;
     }
+    // A tall window can show every loaded row without scrolling, so no scroll event asks for more.
+    private bool GalleryNeedsMore()
+    {
+        var scroll = VisualChildren<ScrollViewer>(_listMode ? MetadataList : Gallery).FirstOrDefault();
+        return scroll is not null && scroll.IsVisible && NearEnd(scroll);
+    }
+    // Within one and a half screens of the end. The gallery scrolls by pixels and the list by
+    // items, so the distance is measured in viewports; an unmeasured layout never counts.
+    private static bool NearEnd(ScrollViewer scroll) => scroll.ViewportHeight > 0 && scroll.ExtentHeight > 0 && scroll.ScrollableHeight - scroll.VerticalOffset <= scroll.ViewportHeight * 1.5;
 
     private async void TileLoaded(object sender, RoutedEventArgs e)
     {
@@ -728,9 +806,10 @@ public partial class MainWindow : Window
         try { _status = await _backend!.PrepareAsync(request, progress, token); Notice("Preparation complete. Your updated archive is ready to search."); await RefreshStatusAsync(); await LoadPeopleAsync(); }
         catch (OperationCanceledException) { _preparationPaused = true; ProgressStage.Text = "Paused"; ProgressMessage.Text = "Finished files are saved. Choose Resume to continue."; UpdateStageStrip(null, paused: true); }
         catch (Exception ex) { ProgressStage.Text = "Preparation stopped"; Notice($"Preparation could not continue: {ex.Message}"); }
-        finally { _preparationUiBusy = false; UpdatePreparationControls(); UpdateDriveSummary(); }
+        finally { _progressTimer.Stop(); _pendingProgress = null; _shownStage = null; _preparationUiBusy = false; UpdatePreparationControls(); UpdateDriveSummary(); }
     }
-    private static readonly string[] StageNames = ["Finding files", "Reading your files", "Making it searchable", "Faces and speech", "Saving"];
+    // The job's phases. Each file is read, transcribed and embedded together, so those are one phase.
+    private static readonly string[] StageNames = ["Finding files", "Reading and indexing", "Matching people", "Saving"];
     private int _stageIndex;
     private void BuildStageStrip()
     {
@@ -763,17 +842,35 @@ public partial class MainWindow : Window
         PausePreparationButton.IsEnabled = available && _preparationUiBusy && _prepareCancellation?.IsCancellationRequested != true;
         foreach (var control in new Control[] { AddPreparationFolderButton, RemovePreparationFolderButton, PreparationFolders, OcrLanguages, VerifyContents }) control.IsEnabled = available && !busy;
     }
+    // Unchanged files can report thousands of times a second. Show the latest state at most
+    // about ten times a second, but never hold back a change of phase.
+    private PreparationProgress? _pendingProgress;
+    private PreparationStage? _shownStage;
+    private long _progressShownAt;
+    private readonly DispatcherTimer _progressTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private void UpdateProgress(PreparationProgress progress)
     {
+        if (progress.Stage == _shownStage && Stopwatch.GetElapsedTime(_progressShownAt) < _progressTimer.Interval)
+        { _pendingProgress = progress; if (!_progressTimer.IsEnabled) _progressTimer.Start(); return; }
+        ShowProgress(progress);
+    }
+    private void ShowPendingProgress() { _progressTimer.Stop(); if (_pendingProgress is { } latest) ShowProgress(latest); }
+    private void ShowProgress(PreparationProgress progress)
+    {
+        _progressTimer.Stop(); _pendingProgress = null; _shownStage = progress.Stage; _progressShownAt = Stopwatch.GetTimestamp();
         ProgressCard.Visibility = Visibility.Visible;
         var percent = progress.Fraction is double fraction ? $" · {Math.Clamp(fraction, 0, 1):P0}" : "";
-        ProgressStage.Text = progress.Stage switch { PreparationStage.Discovering => "Finding files", PreparationStage.Extracting => "Reading your files", PreparationStage.Embedding => "Making content searchable", PreparationStage.RecognizingPeople => "Finding familiar faces", PreparationStage.Transcribing => "Listening for speech", PreparationStage.Publishing => "Saving this update", PreparationStage.Completed => "Ready to travel", PreparationStage.Paused => "Paused", _ => "Preparing your files" } + (progress.Stage is PreparationStage.Completed or PreparationStage.Paused ? "" : percent);
-        UpdateStageStrip(progress.Stage switch { PreparationStage.Discovering => 0, PreparationStage.Extracting => 1, PreparationStage.Embedding => 2, PreparationStage.RecognizingPeople or PreparationStage.Transcribing => 3, PreparationStage.Publishing => 4, PreparationStage.Completed => 5, _ => null }, progress.Stage == PreparationStage.Paused);
+        ProgressStage.Text = progress.Stage switch { PreparationStage.Discovering => "Finding files", PreparationStage.Extracting or PreparationStage.Embedding or PreparationStage.Transcribing => "Reading and indexing your files", PreparationStage.RecognizingPeople => "Finding familiar faces", PreparationStage.Publishing => "Saving this update", PreparationStage.Completed => "Ready to travel", PreparationStage.Paused => "Paused", _ => "Preparing your files" } + (progress.Stage is PreparationStage.Completed or PreparationStage.Paused ? "" : percent);
+        UpdateStageStrip(progress.Stage switch { PreparationStage.Discovering => 0, PreparationStage.Extracting or PreparationStage.Embedding or PreparationStage.Transcribing => 1, PreparationStage.RecognizingPeople => 2, PreparationStage.Publishing => 3, PreparationStage.Completed => 4, _ => null }, progress.Stage == PreparationStage.Paused);
         PreparationProgressBar.IsIndeterminate = progress.Fraction is null; PreparationProgressBar.Value = Math.Clamp(progress.Fraction ?? 0, 0, 1);
-        ProgressSummary.Text = $"{progress.Completed:N0} processed · {progress.Unchanged:N0} unchanged · {progress.Failed:N0} needing attention";
+        var left = progress.SecondsRemaining is long seconds && progress.Stage is PreparationStage.Extracting or PreparationStage.Embedding or PreparationStage.Transcribing ? " · " + FormatRemaining(seconds) : "";
+        ProgressSummary.Text = $"{progress.Completed:N0} processed · {progress.Unchanged:N0} unchanged · {progress.Failed:N0} needing attention{left}";
         ProgressPath.Text = progress.CurrentPath; ProgressMessage.Text = progress.Message;
-        FooterStatus.Text = $"Preparing · {progress.Discovered:N0} files found · {progress.Segments:N0} searchable moments";
+        FooterStatus.Text = $"Preparing · {progress.Discovered:N0} files found · {progress.Segments:N0} searchable moments{left}";
     }
+    private static string FormatRemaining(long seconds) => seconds < 90 ? "about a minute left"
+        : seconds < 90 * 60 ? $"about {Math.Round(seconds / 60d):N0} minutes left"
+        : $"about {seconds / 3600d:N1} hours left";
     private void PausePreparationClick(object sender, RoutedEventArgs e) { _prepareCancellation?.Cancel(); PausePreparationButton.IsEnabled = false; ProgressMessage.Text = "Pausing after current work is safely checkpointed…"; }
 
     private void WindowKeyDown(object sender, KeyEventArgs e)
@@ -852,6 +949,7 @@ public partial class MainWindow : Window
     {
         // A maximized chrome-less window extends past the monitor by the resize frame.
         RootLayout.Margin = WindowState == WindowState.Maximized ? SystemParameters.WindowResizeBorderThickness : new Thickness(0);
+        if (WindowState != WindowState.Minimized && _initialized) _ = RefreshStatusAsync();
         MaximizeButton.Content = WindowState == WindowState.Maximized ? "" : "";
         AutomationProperties.SetName(MaximizeButton, WindowState == WindowState.Maximized ? "Restore" : "Maximize");
     }
@@ -902,7 +1000,7 @@ public partial class MainWindow : Window
         e.Cancel = true;
         if (_closing) return;
         if (!TryLeavePersonEditor()) { _ejectRequested = false; return; }
-        _closing = true; foreach (var request in _portraitRequests.Values.ToArray()) request.Cancel(); DisposeAppearance(); StopPlaybackPolling(); _statusTimer.Stop(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel(); _prepareCancellation?.Cancel(); _updateCancellation?.Cancel();
+        _closing = true; _thumbnails.ReleaseFiles(); foreach (var request in _portraitRequests.Values.ToArray()) request.Cancel(); DisposeAppearance(); StopPlaybackPolling(); _statusTimer.Stop(); _searchCancellation?.Cancel(); _previewCancellation?.Cancel(); _prepareCancellation?.Cancel(); _updateCancellation?.Cancel();
         FooterStatus.Text = "Closing archive and releasing this drive…"; ConnectionLabel.Text = "Closing…";
         try
         {

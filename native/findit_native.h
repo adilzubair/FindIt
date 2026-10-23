@@ -24,6 +24,10 @@ FINDIT_API int fi_embed_text(fi_engine* engine,const char* text,int query,float*
 FINDIT_API int fi_embed_media(fi_engine* engine,const char* path,int image,float* output,int capacity,volatile int32_t* cancel,char** error);
 /* newline-separated scratch frame paths, in chronological order, at most eight. */
 FINDIT_API int fi_embed_frames(fi_engine* engine,const char* paths,float* output,int capacity,volatile int32_t* cancel,char** error);
+/* ABI v1.1: the same inputs from caller-owned memory, avoiding scratch files: one encoded image or WAV,
+ * or count encoded frames in chronological order, at most eight. Buffers are only read during the call. */
+FINDIT_API int fi_embed_media_buffer(fi_engine* engine,const unsigned char* data,size_t length,int image,float* output,int capacity,volatile int32_t* cancel,char** error);
+FINDIT_API int fi_embed_frame_buffers(fi_engine* engine,const unsigned char* const* frames,const size_t* lengths,int count,float* output,int capacity,volatile int32_t* cancel,char** error);
 #ifdef __cplusplus
 }
 #endif

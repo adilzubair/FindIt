@@ -10,6 +10,9 @@ namespace FindIt.Core;
 public sealed partial class ArchiveService : IArchiveBackend
 {
     private const int Dimension = 512;
+    private const int BatchFileLimit = 256;
+    private static readonly TimeSpan BatchInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ReportInterval = TimeSpan.FromMilliseconds(250);
     private readonly ArchiveStorage storage;
     private readonly IEmbeddingProvider embeddings;
     private readonly IContentProcessor processor;
@@ -34,21 +37,22 @@ public sealed partial class ArchiveService : IArchiveBackend
             new RuntimeCapability("keyword", "Filename and keyword search", true, "Available offline without an embedding model."),
             new RuntimeCapability("semantic", "Semantic search", embeddings.Available, embeddings.Available ? "Local query encoder is available." : "Install the verified local model package to enable semantic search.")
         }).GroupBy(c => c.Id).Select(g => g.Last()).ToArray();
-        if (generation is null) return new ArchiveStatus { RootPath = RootPath, DisplayName = new DirectoryInfo(RootPath).Name, IsPreparing = preparing, Capabilities = capabilities, StatusDetail = storage.RecoveryNotice ?? "Choose folders to prepare this drive." };
-        long peopleCount = 0;
+        long peopleCount = 0; string[] folders = [], queries = [];
         if (File.Exists(storage.OverlayPath))
         {
             PortablePaths.RejectLinks(RootPath, storage.OverlayPath);
             using var overlay = ArchiveDatabase.Open(storage.OverlayPath, true);
             peopleCount = Convert.ToInt64(ArchiveDatabase.Scalar(overlay, "SELECT COUNT(*) FROM people WHERE confirmed=1;"), CultureInfo.InvariantCulture);
+            folders = ReadListSetting(overlay, PreparationFoldersKey); queries = ReadListSetting(overlay, RecentQueriesKey);
         }
+        if (generation is null) return new ArchiveStatus { RootPath = RootPath, DisplayName = new DirectoryInfo(RootPath).Name, IsPreparing = preparing, Capabilities = capabilities, StatusDetail = storage.RecoveryNotice ?? "Choose folders to prepare this drive.", PreparationFolders = folders, RecentQueries = queries };
         bool semantic = generation.VectorCount > 0 && embeddings.Available && generation.EmbeddingFingerprint == embeddings.Fingerprint;
         return new ArchiveStatus {
             RootPath = RootPath, DisplayName = new DirectoryInfo(RootPath).Name, LibraryId = generation.LibraryId,
             GenerationId = generation.GenerationId, PreparedUtc = generation.PreparedUtc, IsPreparing = preparing,
             FileCount = generation.FileCount, SegmentCount = generation.SegmentCount, TotalBytes = generation.TotalBytes,
             PeopleCount = peopleCount, Kinds = generation.Kinds, Folders = generation.Folders,
-            Issues = generation.Issues, SemanticAvailable = semantic, Capabilities = capabilities,
+            Issues = generation.Issues, SemanticAvailable = semantic, Capabilities = capabilities, PreparationFolders = folders, RecentQueries = queries,
             StatusDetail = storage.RecoveryNotice ?? ((semantic ? "Prepared for offline search." : generation.VectorCount == 0 ? "Keyword search is ready. Semantic indexing requires the local model package." : "Keyword search is ready. The matching query encoder is unavailable.") + (peopleCount > 1000 ? " The People browser displays the first 1,000 groups; narrower people paging is not yet available." : ""))
         };
     }
@@ -57,7 +61,34 @@ public sealed partial class ArchiveService : IArchiveBackend
     {
         await preparationGate.WaitAsync(cancellationToken);
         Guid jobId = Guid.NewGuid(); long discovered = 0, completed = 0, unchanged = 0, failed = 0, segmentCount = 0;
-        void Report(PreparationStage stage, string path, string message) => progress?.Report(new PreparationProgress { JobId = jobId, Stage = stage, Discovered = discovered, Completed = completed, Unchanged = unchanged, Failed = failed, Segments = segmentCount, CurrentPath = path, Message = message });
+        // Progress is measured in bytes of originals: a background census of the selected folders
+        // supplies the total, and the rate of extracted bytes estimates the remaining time.
+        Task<(long Files, long Bytes)>? census = null;
+        long finishedBytes = 0, unchangedBytes = 0, extractedBytes = 0, extractionTicks = 0;
+        (PreparationStage Stage, string Path, long At)? lastReport = null;
+        void Report(PreparationStage stage, string path, string message)
+        {
+            if (progress is null) return;
+            // Every new item or stage is reported; repeated updates for one item are limited, so a
+            // long video does not send one message per extracted segment.
+            long now = Stopwatch.GetTimestamp();
+            if (lastReport is { } last && last.Stage == stage && last.Path == path && Stopwatch.GetElapsedTime(last.At, now) < ReportInterval) return;
+            lastReport = (stage, path, now);
+            double? fraction = null; long? remaining = null;
+            if (census is { IsCompletedSuccessfully: true } && census.Result.Bytes > 0 && stage is not (PreparationStage.Completed or PreparationStage.Failed))
+            {
+                fraction = Math.Clamp((double)finishedBytes / census.Result.Bytes, 0, 1);
+                double seconds = Stopwatch.GetElapsedTime(0, extractionTicks).TotalSeconds;
+                if (seconds >= 20 && extractedBytes > 0 && finishedBytes > 0)
+                {
+                    // Assume the rest of the walk is unchanged in the same proportion as so far.
+                    double work = Math.Max(0, census.Result.Bytes - finishedBytes) * (1 - (double)unchangedBytes / finishedBytes);
+                    remaining = (long)Math.Ceiling(work * seconds / extractedBytes);
+                }
+            }
+            else if (stage == PreparationStage.Completed) fraction = 1;
+            progress.Report(new PreparationProgress { JobId = jobId, Stage = stage, Discovered = discovered, Completed = completed, Unchanged = unchanged, Failed = failed, Segments = segmentCount, CurrentPath = path, Message = message, Fraction = fraction, SecondsRemaining = remaining });
+        }
         try
         {
             preparing = true; nextObservationId = reservedObservationEnd = 0; storage.EnsureWritable();
@@ -65,6 +96,14 @@ public sealed partial class ArchiveService : IArchiveBackend
             var previous = await storage.RecoverAsync(cancellationToken);
             if (previous is not null && request.VerifyContents) await storage.VerifyAllAsync(previous, cancellationToken);
             var scopes = NormalizeScopes(request.Folders);
+            await WriteListSettingAsync(PreparationFoldersKey, scopes, cancellationToken);
+            Report(PreparationStage.Discovering, "", "Finding files in the selected folders.");
+            census = Task.Run(() =>
+            {
+                long files = 0, bytes = 0;
+                foreach (var original in EnumerateOriginals(scopes, (_, _) => { })) { cancellationToken.ThrowIfCancellationRequested(); files++; bytes += original.Length; }
+                return (files, bytes);
+            }, cancellationToken);
             string extractionFingerprint = ArchiveStorage.HashText(JsonSerializer.Serialize(new { version = 2, extraction = processor.ExtractionFingerprint, face = FaceFingerprint, capabilities = processor.Capabilities.Where(c=>c.Id!="gpu").OrderBy(c => c.Id).Select(c=>new { c.Id,c.Available }).ToArray(), languages = request.OcrLanguages.Order().ToArray() }, WireJson.Options));
             string settings = ArchiveStorage.HashText(JsonSerializer.Serialize(new { folders = scopes, request.VerifyContents, extractionFingerprint }, WireJson.Options));
             StageState? state = null;
@@ -117,29 +156,58 @@ public sealed partial class ArchiveService : IArchiveBackend
             using (var thumbnails = new PackWriter(RootPath, state.ThumbnailPack))
             using (var vectors = new PackWriter(RootPath, state.VectorPack))
             {
-                long checkpointedCompleted=0;
+                // Files commit in batches: each commit forces several flushes, which dominate
+                // small files on USB media. A file is still all-or-nothing through its savepoint;
+                // an interruption only re-prepares the uncommitted tail of the current batch.
+                bool inBatch=false;int batchFiles=0;long batchStart=0;
+                void BeginBatch()
+                {
+                    if(inBatch)return;
+                    ArchiveDatabase.Execute(db,"BEGIN IMMEDIATE;");inBatch=true;batchFiles=0;batchStart=Stopwatch.GetTimestamp();
+                }
+                void CommitBatch()
+                {
+                    if(!inBatch)return;
+                    inBatch=false;
+                    // SQLite may already have rolled the batch back after a storage error.
+                    if(!ArchiveDatabase.InTransaction(db))return;
+                    // Flush packed payloads before committing their references.
+                    thumbnails.Flush();vectors.Flush();
+                    ArchiveDatabase.Execute(db,"COMMIT;");
+                    PreparationFaults.Hit(RootPath,"file.committed");
+                }
+                void CommitBatchIfDue(){if(inBatch&&(batchFiles>=BatchFileLimit||Stopwatch.GetElapsedTime(batchStart)>=BatchInterval))CommitBatch();}
+                long changed=0,checkpointedChanged=0;
                 long checkpointTime=Stopwatch.GetTimestamp();
+                var checkpointCost=TimeSpan.Zero;
                 async Task CheckpointIfDueAsync(bool pause=false)
                 {
-                    if(completed<=checkpointedCompleted)return;
-                    bool due=pause||previous is null||completed-checkpointedCompleted>=100||Stopwatch.GetElapsedTime(checkpointTime)>=TimeSpan.FromMinutes(5);
+                    if(changed<=checkpointedChanged)return;
+                    // A checkpoint copies, checks and hashes the whole catalog. Grow its file interval
+                    // with the published library, and keep timed checkpoints to about a tenth of the work.
+                    long fileInterval=Math.Max(100,(previous?.FileCount??0)/4);
+                    var elapsed=Stopwatch.GetElapsedTime(checkpointTime);
+                    bool due=pause||previous is null||changed-checkpointedChanged>=fileInterval||elapsed>=TimeSpan.FromMinutes(5)&&elapsed>=checkpointCost*9;
                     if(!due)return;
+                    CommitBatch();
+                    long started=Stopwatch.GetTimestamp();
                     using var pauseBudget=pause?new CancellationTokenSource(TimeSpan.FromSeconds(10)):null;
                     var published=await PublishCheckpointAsync(db,state!,previous,thumbnails,vectors,Report,pauseBudget?.Token??cancellationToken,!pause);
-                    state=published.State;previous=published.Manifest;checkpointedCompleted=completed;checkpointTime=Stopwatch.GetTimestamp();
+                    state=published.State;previous=published.Manifest;checkpointedChanged=changed;checkpointTime=Stopwatch.GetTimestamp();checkpointCost=Stopwatch.GetElapsedTime(started);
                     Report(PreparationStage.Extracting,"",pause?"Completed files are searchable while preparation is paused.":"Completed files are searchable. Preparation continues.");
                 }
                 try
                 {
-                foreach (var absolute in EnumerateOriginals(scopes, (path, message) => {
-                    failed++; AddIssue(db, path, "Discovering", message);
+                foreach (var original in EnumerateOriginals(scopes, (path, message) => {
+                    BeginBatch(); failed++; AddIssue(db, path, "Discovering", message);
                     ArchiveDatabase.Execute(db, "UPDATE files SET seen=1 WHERE path=$path COLLATE NOCASE OR path LIKE $prefix ESCAPE '\\';", ("$path", path), ("$prefix", EscapeLike(path) + "/%"));
                 }))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     ArchiveSpace.EnsureAvailable(RootPath);
-                    string relative = PortablePaths.Relative(RootPath, absolute); discovered++;
-                    Report(PreparationStage.Discovering, relative, "Preparing originals without changing them.");
+                    string absolute = original.FullName, relative = PortablePaths.Relative(RootPath, absolute); discovered++;
+                    long fileStarted = Stopwatch.GetTimestamp();
+                    Report(PreparationStage.Extracting, relative, "Preparing originals without changing them.");
                     try
                     {
                         PortablePaths.RejectLinks(RootPath, absolute);
@@ -155,17 +223,18 @@ public sealed partial class ArchiveService : IArchiveBackend
                         string hash = request.VerifyContents ? await ArchiveStorage.HashFileAsync(absolute, cancellationToken) : "";
                         if (matches && request.VerifyContents) matches = oldHash == hash;
                         bool needsEmbeddings = embeddings.Available && ArchiveDatabase.Scalar(db, "SELECT 1 FROM segments WHERE file_id=$id AND vector_path IS NULL AND skip_embedding=0 AND length(text)>0 LIMIT 1;", ("$id", oldId)) is not null;
+                        BeginBatch();
                         if (matches && !needsEmbeddings)
                         {
                             ArchiveDatabase.Execute(db, "UPDATE files SET seen=1 WHERE id=$id; INSERT OR IGNORE INTO completed(path) VALUES($path);", ("$id", oldId), ("$path", relative));
-                            completed++; unchanged++; Report(PreparationStage.Extracting, relative, alreadyCompleted ? "Resumed a completed item." : "Unchanged item reused.");
+                            completed++; unchanged++; batchFiles++; unchangedBytes += bytes; Report(PreparationStage.Extracting, relative, alreadyCompleted ? "Resumed a completed item." : "Unchanged item reused.");
                         }
                         else
                         {
                         var fileId = oldId ?? Guid.NewGuid().ToString("D");
                         long segmentsBeforeFile=segmentCount;
                         long thumbnailMark=thumbnails.Position,vectorMark=vectors.Position;
-                        ArchiveDatabase.Execute(db, "BEGIN IMMEDIATE;");
+                        ArchiveDatabase.Execute(db, "SAVEPOINT prepared_file;");
                         try
                         {
                             ArchiveDatabase.Execute(db, "DELETE FROM search_fts WHERE file_id=$id; DELETE FROM segments WHERE file_id=$id; INSERT INTO files(id,path,kind,bytes,modified,hash,seen,processor_fingerprint) VALUES($id,$path,$kind,$bytes,$modified,$hash,1,$processor) ON CONFLICT(id) DO UPDATE SET path=excluded.path,kind=excluded.kind,bytes=excluded.bytes,modified=excluded.modified,hash=excluded.hash,seen=1,processor_fingerprint=excluded.processor_fingerprint;",
@@ -177,7 +246,7 @@ public sealed partial class ArchiveService : IArchiveBackend
                                 Report(PreparationStage.Extracting, relative, "Extracting searchable content and previews.");
                                 var vector = segment.Embedding;
                                 if (vector is null && !segment.SkipTextEmbedding && embeddings.Available && !string.IsNullOrWhiteSpace(segment.Text))
-                                { Report(PreparationStage.Embedding, relative, "Creating local semantic embeddings."); vector = await embeddings.EmbedTextAsync(segment.Text.Length > 24000 ? segment.Text[..24000] : segment.Text, false, cancellationToken); }
+                                { Report(PreparationStage.Extracting, relative, "Creating local semantic embeddings."); vector = await embeddings.EmbedTextAsync(segment.Text.Length > 24000 ? segment.Text[..24000] : segment.Text, false, cancellationToken); }
                                 var encoded = VectorEncoding.Encode(vector, Dimension);
                                 BlobReference? vectorReference = encoded is null ? null : vectors.Append(encoded);
                                 BlobReference? thumbnail = segment.ThumbnailJpeg is { Length: > 0 } ? thumbnails.Append(segment.ThumbnailJpeg) : null;
@@ -188,19 +257,17 @@ public sealed partial class ArchiveService : IArchiveBackend
                             if (emitted == 0) { InsertSegment(db, fileId, relative, new ExtractedSegment { Kind = SegmentKind.Text }, null, null, thumbnails); segmentCount++; }
                             info.Refresh();
                             if (!info.Exists || info.Length != bytes || info.LastWriteTimeUtc.ToString("O", CultureInfo.InvariantCulture) != modified) throw new IOException("The original changed while it was being prepared; it will be retried.");
-                            // Flush packed payloads before committing their references.
-                            thumbnails.Flush(); vectors.Flush();
-                            ArchiveDatabase.Execute(db, "INSERT OR REPLACE INTO completed(path) VALUES($path);", ("$path", relative));
-                            ArchiveDatabase.Execute(db, "COMMIT;"); completed++;
+                            ArchiveDatabase.Execute(db, "INSERT OR REPLACE INTO completed(path) VALUES($path); RELEASE prepared_file;", ("$path", relative));
+                            completed++; changed++; batchFiles++; extractedBytes += bytes; extractionTicks += Stopwatch.GetTimestamp() - fileStarted;
                         }
                         catch
                         {
-                            try { ArchiveDatabase.Execute(db,"ROLLBACK;"); }
+                            try { if (ArchiveDatabase.InTransaction(db)) ArchiveDatabase.Execute(db,"ROLLBACK TO prepared_file; RELEASE prepared_file;"); }
                             finally
                             {
                                 segmentCount=segmentsBeforeFile;
-                                // Only this writable tail belongs to the interrupted transaction.
-                                // Sealed packs from published snapshots are never opened here.
+                                // Only this file's writable tail belongs to the rolled-back savepoint.
+                                // Earlier files in the batch end before it; sealed packs are never opened here.
                                 try { thumbnails.Truncate(thumbnailMark); }
                                 catch(Exception cleanupError) when(cleanupError is IOException or UnauthorizedAccessException or InvalidOperationException) { }
                                 try { vectors.Truncate(vectorMark); }
@@ -208,14 +275,14 @@ public sealed partial class ArchiveService : IArchiveBackend
                             }
                             throw;
                         }
-                        // This boundary is outside the transaction rollback scope:
-                        // committed references must never have their packs truncated.
-                        PreparationFaults.Hit(RootPath, "file.committed");
                         }
                     }
                     catch (Exception error) when (error is not OperationCanceledException && error is not OutOfMemoryException && error is not ArchiveSpaceException)
                     {
-                        failed++; AddIssue(db, relative, "Extracting", error.Message);
+                        // A storage error can make SQLite roll back the whole batch, including files
+                        // marked seen. Continuing would let final reconciliation delete them.
+                        if (inBatch && !ArchiveDatabase.InTransaction(db)) { inBatch = false; throw new IOException("A storage error interrupted preparation. Earlier saved files are kept; choose Resume to continue.", error); }
+                        BeginBatch(); failed++; AddIssue(db, relative, "Extracting", error.Message);
                         // Preserve previously prepared content for a failed update, and report it explicitly.
                         ArchiveDatabase.Execute(db, "UPDATE files SET seen=1 WHERE path=$path COLLATE NOCASE;", ("$path", relative));
                         if (ArchiveDatabase.Scalar(db, "SELECT 1 FROM files WHERE path=$path COLLATE NOCASE;", ("$path", relative)) is null)
@@ -236,17 +303,26 @@ public sealed partial class ArchiveService : IArchiveBackend
                         }
                         Report(PreparationStage.Extracting, relative, "This item needs attention; other items continue.");
                     }
+                    finishedBytes += original.Length;
+                    CommitBatchIfDue();
                     await CheckpointIfDueAsync();
                 }
                 cancellationToken.ThrowIfCancellationRequested();
+                CommitBatch();
                 thumbnails.Flush(); vectors.Flush();
                 }
                 catch(OperationCanceledException) when(cancellationToken.IsCancellationRequested)
                 {
-                    try{await CheckpointIfDueAsync(pause:true);}
+                    try{CommitBatch();await CheckpointIfDueAsync(pause:true);}
                     catch(Exception checkpointError) when(checkpointError is IOException or UnauthorizedAccessException or SqliteException or OperationCanceledException)
                     {Report(PreparationStage.Paused,"","Completed files remain durable in staging; the last published search snapshot is preserved.");}
                     throw;
+                }
+                finally
+                {
+                    // Keep the batch's finished files when another failure ends preparation.
+                    try{CommitBatch();}
+                    catch(Exception commitError) when(commitError is IOException or UnauthorizedAccessException or SqliteException){}
                 }
             }
             cancellationToken.ThrowIfCancellationRequested();
@@ -278,6 +354,33 @@ public sealed partial class ArchiveService : IArchiveBackend
         }
     }
 
+    private const string PreparationFoldersKey = "preparation_folders", RecentQueriesKey = "recent_queries";
+    private const int RecentQueryLimit = 6;
+    public async Task SaveRecentQueriesAsync(IReadOnlyList<string> queries, CancellationToken cancellationToken = default)
+    {
+        var bounded = queries.Select(q => q.Trim()).Where(q => q.Length is > 0 and <= 512).Distinct(StringComparer.OrdinalIgnoreCase).Take(RecentQueryLimit).ToArray();
+        // Searching a drive that was never prepared must not create its archive folder.
+        if (!Directory.Exists(storage.Home)) return;
+        storage.EnsureWritable();
+        await WriteListSettingAsync(RecentQueriesKey, bounded, cancellationToken);
+    }
+    private async Task WriteListSettingAsync(string key, string[] values, CancellationToken cancellationToken)
+    {
+        await overlayGate.WaitAsync(cancellationToken);
+        try
+        {
+            PortablePaths.RejectLinks(RootPath, storage.OverlayPath);
+            using var overlay = ArchiveDatabase.Open(storage.OverlayPath); ArchiveDatabase.InitializeOverlay(overlay);
+            ArchiveDatabase.Execute(overlay, "INSERT INTO settings(key,value) VALUES($key,$value) ON CONFLICT(key) DO UPDATE SET value=excluded.value;", ("$key", key), ("$value", JsonSerializer.Serialize(values, WireJson.Options)));
+        }
+        finally { overlayGate.Release(); }
+    }
+    private static string[] ReadListSetting(SqliteConnection overlay, string key)
+    {
+        try { return ArchiveDatabase.Scalar(overlay, "SELECT value FROM settings WHERE key=$key;", ("$key", key)) is string json ? JsonSerializer.Deserialize<string[]>(json, WireJson.Options) ?? [] : []; }
+        catch (Exception error) when (error is JsonException or SqliteException) { return []; }
+    }
+
     private string[] NormalizeScopes(IReadOnlyList<string> requested)
     {
         var selected = (requested.Count == 0 ? new[] { RootPath } : requested).Select(p => Path.IsPathRooted(p) ? PortablePaths.Relative(RootPath, p) : p.Replace('\\', '/').Trim('/')).Select(p => string.IsNullOrEmpty(p) ? "." : p).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p => p.Length).ToArray();
@@ -293,28 +396,28 @@ public sealed partial class ArchiveService : IArchiveBackend
         return scopes.ToArray();
     }
 
-    private IEnumerable<string> EnumerateOriginals(string[] scopes, Action<string, string> issue)
+    private IEnumerable<FileInfo> EnumerateOriginals(string[] scopes, Action<string, string> issue)
     {
         foreach (var scope in scopes)
         {
             var pending = new Stack<string>(); pending.Push(scope == "." ? RootPath : PortablePaths.Resolve(RootPath, scope));
             while (pending.TryPop(out var folder))
             {
-                string[] children;
-                try { PortablePaths.RejectLinks(RootPath, folder); children = Directory.GetFileSystemEntries(folder); }
+                // The directory listing already carries attributes and sizes, so a slow drive is
+                // not asked for each entry's metadata again.
+                FileSystemInfo[] children;
+                try { PortablePaths.RejectLinks(RootPath, folder); children = new DirectoryInfo(folder).GetFileSystemInfos(); }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException) { issue(PortablePaths.Relative(RootPath, folder), error.Message); continue; }
                 foreach (var child in children)
                 {
-                    FileAttributes attributes;
-                    try { attributes = File.GetAttributes(child); }
-                    catch (Exception error) when (error is IOException or UnauthorizedAccessException) { issue(PortablePaths.Relative(RootPath, child), error.Message); continue; }
-                    if ((attributes & FileAttributes.ReparsePoint) != 0) { issue(PortablePaths.Relative(RootPath, child), "Linked files and junctions were skipped."); continue; }
-                    if ((attributes & FileAttributes.Directory) != 0)
+                    var attributes = child.Attributes;
+                    if ((attributes & FileAttributes.ReparsePoint) != 0) { issue(PortablePaths.Relative(RootPath, child.FullName), "Linked files and junctions were skipped."); continue; }
+                    if (child is DirectoryInfo)
                     {
-                        var name = Path.GetFileName(child);
-                        if (!(string.Equals(folder, RootPath, StringComparison.OrdinalIgnoreCase) && name.Equals("FindIt", StringComparison.OrdinalIgnoreCase)) && !name.Equals("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase) && !name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase)) pending.Push(child);
+                        var name = child.Name;
+                        if (!(string.Equals(folder, RootPath, StringComparison.OrdinalIgnoreCase) && name.Equals("FindIt", StringComparison.OrdinalIgnoreCase)) && !name.Equals("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase) && !name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase)) pending.Push(child.FullName);
                     }
-                    else if (!(string.Equals(folder, RootPath, StringComparison.OrdinalIgnoreCase) && Path.GetFileName(child).Equals("FindIt.exe", StringComparison.OrdinalIgnoreCase))) yield return child;
+                    else if (child is FileInfo file && !(string.Equals(folder, RootPath, StringComparison.OrdinalIgnoreCase) && file.Name.Equals("FindIt.exe", StringComparison.OrdinalIgnoreCase))) yield return file;
                 }
             }
         }
@@ -356,7 +459,7 @@ public sealed partial class ArchiveService : IArchiveBackend
     public async ValueTask DisposeAsync()
     {
         warmUpCancellation.Cancel(); await semanticWarmUp; warmUpCancellation.Dispose();
-        searchSessions.Clear();
+        searchSessions.Clear(); await CloseSharedCatalogAsync(); catalogGate.Dispose();
         nativeIndex?.Dispose(); nativeDeltaIndex?.Dispose(); exactIndex?.Dispose();
         await embeddings.DisposeAsync(); await processor.DisposeAsync(); preparationGate.Dispose(); overlayGate.Dispose(); searchGate.Dispose();
     }

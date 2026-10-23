@@ -176,11 +176,14 @@ public partial class MainWindow
             await Click(NextPageButton); await Click(NextPageButton);
             Check("final-page-and-accurate-range", _page == 2 && CurrentTiles.Count == 138 && !NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
             backend.RestartNextSearch = true; await Click(PreviousPageButton);
-            Check("expired-session-clears-pages-and-offers-restart", CurrentTiles.Count == 0 && _pages.Count == 0 && _pageCursors.Count == 1 && _searchGeneration is null && !NextPageButton.IsEnabled && !PreviousPageButton.IsEnabled && Equals(EmptyAction.Content, "Try search again"));
-            await Click(EmptyAction);
-            Check("session-restart-keeps-submitted-query", _page == 0 && backend.Requests.Last().Cursor is null && backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == 256);
+            Check("expired-session-reruns-search-in-place", _page == 0 && _searchError is null && backend.Requests.Last().Cursor is null && backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == 256 && NoticeText.Text.Contains("refreshed", StringComparison.Ordinal),
+                new { _page, _searchError, cursor = backend.Requests.Last().Cursor, query = backend.Requests.Last().Query, tiles = CurrentTiles.Count, notice = NoticeText.Text });
             await Click(SearchMoreButton);
             Check("deeper-search-starts-new-window", _page == 0 && backend.Requests.Last().Cursor is null && backend.Requests.Last().RetrievalBudget == 2048 && CurrentTiles.Count == 256);
+            var firstRow = Rows.FirstOrDefault(); await LoadMoreAsync(); await Idle();
+            Check("scrolling-appends-next-page-in-place", _firstPage == 0 && _page == 1 && CurrentTiles.Count == 512 && ReferenceEquals(Rows.FirstOrDefault(), firstRow) && ResultCount.Text.StartsWith("1–512", StringComparison.Ordinal) && backend.Requests.Last().RetrievalBudget == 2048 && PreviousPageButton.IsEnabled == false);
+            await LoadMoreAsync(); await Idle();
+            Check("appending-stops-at-the-last-page", _page == 2 && CurrentTiles.Count == 650 && !CanLoadMore && !NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
             foreach (bool dark in new[] { false, true })
             {
                 SetDarkTheme(dark); Width = 880; Height = 520; await Idle();
@@ -233,7 +236,8 @@ public partial class MainWindow
             backend.ReverseResults = false; QueryBox.Clear(); SearchClick(this, new RoutedEventArgs()); await Idle();
 
             ExactFilter.IsChecked = true; await Idle(); var viewFilters = _filters; var viewRequests = backend.Requests.Count;
-            await Click(ListViewButton); Check("list-view-keeps-filter-state", _listMode && MetadataList.IsVisible && _filters == viewFilters && backend.Requests.Count == viewRequests);
+            await Click(ListViewButton); Check("list-view-keeps-filter-state", _listMode && MetadataList.IsVisible && _filters == viewFilters && backend.Requests.Count == viewRequests,
+                new { requests = backend.Requests.Count - viewRequests, _page, tiles = CurrentTiles.Count, scroll = VisualChildren<ScrollViewer>(MetadataList).Select(v => new { v.ViewportHeight, v.ExtentHeight, v.VerticalOffset }).FirstOrDefault() });
             await Click(GridViewButton); Check("grid-view-keeps-filter-state", !_listMode && Gallery.IsVisible && _filters == viewFilters && backend.Requests.Count == viewRequests);
             await ClearExact();
             await Click(ListViewButton);
@@ -260,8 +264,10 @@ public partial class MainWindow
             var expectedDown = ContactSheetLayout.FindVerticalNeighbor(_sheetRows, CurrentTiles.IndexOf(nextFocusedTile!), 1);
             WindowKeyDown(this, KeyArgs(Key.Down)); await Idle();
             Check("gallery-down-follows-visible-column", ReferenceEquals((Keyboard.FocusedElement as Button)?.DataContext, CurrentTiles[expectedDown]));
+            // Reaching the end also appends the next page; End lands on the file that was last.
+            var lastLoaded = CurrentTiles.Last();
             WindowKeyDown(this, KeyArgs(Key.End)); await Idle();
-            Check("gallery-end-reaches-virtualized-last-file", ReferenceEquals((Keyboard.FocusedElement as Button)?.DataContext, CurrentTiles.Last()));
+            Check("gallery-end-reaches-virtualized-last-file", ReferenceEquals((Keyboard.FocusedElement as Button)?.DataContext, lastLoaded));
             WindowKeyDown(this, KeyArgs(Key.Home)); await Idle();
             Check("gallery-home-returns-to-first-file", ReferenceEquals((Keyboard.FocusedElement as Button)?.DataContext, CurrentTiles.First()));
             nextFocusedTile = (Keyboard.FocusedElement as Button)?.DataContext as ResultTile;
@@ -467,6 +473,7 @@ public partial class MainWindow
             var person = new PersonRecord { Id = request.PersonId ?? PersonId(_records.Count), Name = request.Name, Aliases = request.Aliases, Confirmed = true };
             _records.RemoveAll(p => p.Id == person.Id); _records.Add(person); return person;
         }
+        public Task SaveRecentQueriesAsync(IReadOnlyList<string> queries, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<PreviewResult> GetPreviewAsync(PreviewRequest request, CancellationToken cancellationToken = default)
         {
             var file = _files.Single(f => f.FileId == request.FileId);

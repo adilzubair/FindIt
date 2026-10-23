@@ -24,6 +24,39 @@ public class ArchiveTests
     }
 
     [TestMethod]
+    public async Task PreparationFoldersAndRecentSearchesTravelWithTheDrive()
+    {
+        await Write("lease.txt", "The lease permits two cats.");
+        await using (var unprepared = Service())
+        {
+            await unprepared.SaveRecentQueriesAsync(["cats"]);
+            Assert.IsFalse(Directory.Exists(Path.Combine(_root, "FindIt")), "Saving searches must not create an archive on an unprepared drive.");
+        }
+        await using (var service = Service())
+        {
+            await service.PrepareAsync(new PreparationRequest { Folders = ["Documents"] });
+            await service.SaveRecentQueriesAsync(["cats", "  ", "forest", "CATS"]);
+        }
+        await using var reopened = Service();
+        var status = await reopened.GetStatusAsync();
+        CollectionAssert.AreEqual(new[] { "Documents" }, status.PreparationFolders.ToArray());
+        CollectionAssert.AreEqual(new[] { "cats", "forest" }, status.RecentQueries.ToArray());
+    }
+
+    [TestMethod]
+    public async Task PreparationReportsMeasuredProgressWithoutPerSegmentStageChanges()
+    {
+        for (int i = 0; i < 20; i++) await Write($"note-{i:D2}.txt", $"Progress note {i} about forests.");
+        var reports = new List<PreparationProgress>();
+        await using var service = Service();
+        await service.PrepareAsync(new PreparationRequest { Folders = ["Documents"] }, new InlineProgress(reports.Add));
+        Assert.IsTrue(reports.Any(p => p.Stage == PreparationStage.Extracting && p.Fraction is > 0 and < 1), "File progress should report a measured fraction once the census finishes.");
+        Assert.AreEqual(1d, reports[^1].Fraction);
+        Assert.IsFalse(reports.Any(p => p.Stage == PreparationStage.Embedding), "Embedding is part of reading each file, not a separate job phase.");
+        Assert.IsTrue(reports.Select(p => p.CurrentPath).Distinct().Count() >= 20, "Every file still gets its own progress update.");
+    }
+
+    [TestMethod]
     public async Task PrepareSearchUpdateDeleteAndOriginalSafety()
     {
         await Write("lease.txt", "The lease permits two cats. Exact invoice AB-0091.");

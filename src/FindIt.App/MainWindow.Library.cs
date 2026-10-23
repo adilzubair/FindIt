@@ -133,7 +133,7 @@ public partial class MainWindow
     }
     private async void SearchClick(object sender, RoutedEventArgs e) { Navigate("search"); await SearchAsync(true, submitQuery: true); }
     private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; Navigate("search"); await SearchAsync(true, submitQuery: true); } }
-    private async void PreviousClick(object sender, RoutedEventArgs e) { if (_page > 0) await SearchAsync(false, _page - 1); }
+    private async void PreviousClick(object sender, RoutedEventArgs e) { if (_firstPage > 0) await SearchAsync(false, _firstPage - 1); }
     private async void NextClick(object sender, RoutedEventArgs e) { if (_pageCursors.Count > _page + 1) await SearchAsync(false, _page + 1); }
     private async void SearchMoreClick(object sender, RoutedEventArgs e) => await SearchDeeperAsync();
     private async Task SearchDeeperAsync()
@@ -170,21 +170,25 @@ public partial class MainWindow
                 _sheetRows = [.. _sheetRows.Take(_sheetRows.Count - 1), tail with { ThumbnailHeight = full.ThumbnailHeight, Widths = Enumerable.Repeat(full.Widths[0], tail.Count).ToArray(), Extent = full.Extent }];
             _columns = _sheetRows.FirstOrDefault()?.Count ?? 1;
             _sheetVersion++;
-            // Same files on the same rows (most resize steps, density changes within a column
-            // count): resize in place. Rebuilding recreates every tile and reloads its thumbnail.
-            var sameRows = Rows.Count == _sheetRows.Count && Rows.Zip(_sheetRows).All(pair => pair.First.Tiles.Count == pair.Second.Count && pair.First.Tiles.SequenceEqual(CurrentTiles.Skip(pair.Second.Start).Take(pair.Second.Count)));
-            if (!sameRows) Rows.Clear();
+            // Rows holding the same files (most resize steps, density changes within a column count,
+            // and every full row before an appended page) are resized in place. Rebuilding recreates
+            // each tile and reloads its thumbnail, so only rows that changed are replaced.
+            var kept = 0;
+            while (kept < Rows.Count && kept < _sheetRows.Count && Rows[kept].Tiles.Count == _sheetRows[kept].Count && Rows[kept].Tiles.SequenceEqual(CurrentTiles.Skip(_sheetRows[kept].Start).Take(_sheetRows[kept].Count))) kept++;
+            var sameRows = kept == Rows.Count && kept == _sheetRows.Count;
+            if (kept == 0) Rows.Clear(); else while (Rows.Count > kept) Rows.RemoveAt(Rows.Count - 1);
             for (var index = 0; index < _sheetRows.Count; index++)
             {
                 var row = _sheetRows[index];
-                var tiles = sameRows ? Rows[index].Tiles : CurrentTiles.Skip(row.Start).Take(row.Count).ToArray();
+                var existing = index < kept;
+                var tiles = existing ? Rows[index].Tiles : CurrentTiles.Skip(row.Start).Take(row.Count).ToArray();
                 for (var i = 0; i < tiles.Count; i++)
                 {
-                    var grew = sameRows && (row.Widths[i] > tiles[i].TileWidth + .5 || row.ThumbnailHeight > tiles[i].ThumbnailHeight + .5);
+                    var grew = existing && (row.Widths[i] > tiles[i].TileWidth + .5 || row.ThumbnailHeight > tiles[i].ThumbnailHeight + .5);
                     tiles[i].TileWidth = row.Widths[i]; tiles[i].ThumbnailHeight = row.ThumbnailHeight;
                     if (grew) RefreshGrownThumbnail(tiles[i]);
                 }
-                if (sameRows) Rows[index].Extent = row.Extent; else Rows.Add(new(tiles, row.Extent));
+                if (existing) Rows[index].Extent = row.Extent; else Rows.Add(new(tiles, row.Extent));
             }
             if (scroll is not null && anchor > 0)
                 ScrollGalleryToAnchor(anchor);

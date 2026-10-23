@@ -26,7 +26,7 @@ public sealed partial class ContentProcessor
         using var pix = Pix.LoadFromMemory(image); using var page = ocr.Process(pix); return page.GetText().Trim();
     }
 
-    private async IAsyncEnumerable<ExtractedSegment> DocumentsAsync(string path, string scratch, PreparationRequest options, [EnumeratorCancellation] CancellationToken token)
+    private async IAsyncEnumerable<ExtractedSegment> DocumentsAsync(string path, PreparationRequest options, [EnumeratorCancellation] CancellationToken token)
     {
         if (Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
         {
@@ -34,8 +34,7 @@ public sealed partial class ContentProcessor
             {
                 var words = page.Text;
                 if (words.Count(char.IsLetterOrDigit) < 40) words = ReadOcr(page.Image, options.OcrLanguages);
-                var imagePath = Path.Combine(scratch, "page.jpg"); await File.WriteAllBytesAsync(imagePath, page.Image, token);
-                yield return new() { Kind = SegmentKind.DocumentPage, Page = page.Number, Text = words, ThumbnailJpeg = page.Thumbnail, Embedding = await media.EmbedMediaAsync(imagePath, true, token) };
+                yield return new() { Kind = SegmentKind.DocumentPage, Page = page.Number, Text = words, ThumbnailJpeg = page.Thumbnail, Embedding = await EmbedEncodedAsync(page.Image, true, "page.jpg", token) };
                 foreach (var chunk in DocumentTextExtraction.Chunk(words)) yield return new() { Kind = SegmentKind.Text, Page = page.Number, Text = chunk, Embedding = await text.EmbedTextAsync(chunk, false, token) };
             }
             yield break;

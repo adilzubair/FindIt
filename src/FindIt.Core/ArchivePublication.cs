@@ -38,8 +38,11 @@ public sealed partial class ArchiveService
         }
         var semantic = PublishVectorIndexes(previous, state.GenerationId, indexPath, vectorPacks, vectorCount,
             message => report(PreparationStage.Publishing, "", message), cancellationToken, publicationFolder);
-        ArchiveDatabase.Execute(db, "INSERT INTO search_fts(search_fts) VALUES('optimize');");
-        if (ArchiveDatabase.Scalar(db, "PRAGMA integrity_check;")?.ToString() != "ok") throw new InvalidDataException("The prepared catalog failed integrity checks.");
+        // A checkpoint is a fresh online-backup copy that the next one replaces. Merging the
+        // whole text index and cross-checking every index entry are kept for the final publish.
+        bool checkpoint = publicationFolder != storage.StagePath;
+        if (!checkpoint) ArchiveDatabase.Execute(db, "INSERT INTO search_fts(search_fts) VALUES('optimize');");
+        if (ArchiveDatabase.Scalar(db, checkpoint ? "PRAGMA quick_check;" : "PRAGMA integrity_check;")?.ToString() != "ok") throw new InvalidDataException("The prepared catalog failed integrity checks.");
         var referenced = new HashSet<string>(vectorPacks, StringComparer.Ordinal);
         var currentRelative = storage.Relative(storage.GenerationDirectory(state.GenerationId)) + "/";
         if (semantic.BasePath is not null && !semantic.BasePath.StartsWith(currentRelative, StringComparison.Ordinal)) referenced.Add(semantic.BasePath);

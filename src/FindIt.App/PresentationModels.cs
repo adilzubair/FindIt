@@ -202,13 +202,11 @@ internal sealed class ThumbnailCache
         {
             return await Task.Run(async () =>
             {
-                var path = ResolveArchiveBlob(reference.RelativePath);
-                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.Asynchronous | FileOptions.RandomAccess);
-                ValidateHandleLocation(stream.SafeFileHandle);
-                if (reference.Offset > stream.Length - reference.Length) return null;
-                stream.Position = reference.Offset;
+                var pack = Pack(reference.RelativePath);
+                if (reference.Offset > RandomAccess.GetLength(pack) - reference.Length) return null;
                 var data = new byte[reference.Length];
-                await stream.ReadExactlyAsync(data, token);
+                for (int read = 0, count; read < data.Length; read += count)
+                    if ((count = await RandomAccess.ReadAsync(pack, data.AsMemory(read), reference.Offset + read, token)) == 0) throw new EndOfStreamException("Preview data is incomplete.");
                 using var imageStream = new MemoryStream(data, false);
                 // The header gives the stored size without decoding, so the box can be covered exactly.
                 var source = BitmapDecoder.Create(imageStream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
@@ -226,9 +224,33 @@ internal sealed class ThumbnailCache
                 return image;
             }, token);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or System.Runtime.InteropServices.COMException or FormatException or ArgumentException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or System.Runtime.InteropServices.COMException or FormatException or ArgumentException or ObjectDisposedException)
+        {
+            // A removed or reconnected drive invalidates the kept handle; reopen it next time.
+            if (ex is IOException or ObjectDisposedException) Forget(reference.RelativePath);
+            return null;
+        }
         finally { _decodeSlots.Release(); }
     }
+
+    // Each thumbnail used to resolve and check its pack path, open it and check the handle again:
+    // several metadata requests per tile on a slow drive. A few validated handles are kept instead,
+    // read at an offset, and closed before the drive is ejected or another library opens.
+    private readonly Dictionary<string, SafeFileHandle> _packs = new(StringComparer.OrdinalIgnoreCase);
+    private SafeFileHandle Pack(string relative)
+    {
+        lock (_packs) if (_packs.TryGetValue(relative, out var open) && !open.IsClosed) return open;
+        var handle = File.OpenHandle(ResolveArchiveBlob(relative), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        try { ValidateHandleLocation(handle); } catch { handle.Dispose(); throw; }
+        lock (_packs)
+        {
+            if (_packs.TryGetValue(relative, out var raced) && !raced.IsClosed) { handle.Dispose(); return raced; }
+            if (_packs.Count >= 16) ReleaseFiles();
+            return _packs[relative] = handle;
+        }
+    }
+    private void Forget(string relative) { lock (_packs) if (_packs.Remove(relative, out var handle)) handle.Dispose(); }
+    public void ReleaseFiles() { lock (_packs) { foreach (var handle in _packs.Values) handle.Dispose(); _packs.Clear(); } }
 
     private static int DecodeWidth(BlobReference reference, int sourceWidth, int sourceHeight, Size? displayPixels) => displayPixels is { } box
         ? ThumbnailSizing.CoverWidth(sourceWidth, sourceHeight, box.Width, box.Height)

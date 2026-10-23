@@ -26,7 +26,8 @@ public sealed partial class ArchiveService
             using(var snapshot=ArchiveDatabase.Open(Path.Combine(folder,"catalog.sqlite")))
             {
                 live.BackupDatabase(snapshot);
-                published=await PublishSnapshotAsync(snapshot,state,previous,report,cancellationToken,folder);
+                // A checkpoint is part of reading files, not the final save; keep the job's stage.
+                published=await PublishSnapshotAsync(snapshot,state,previous,(_,path,_)=>report(PreparationStage.Extracting,path,"Saving progress so finished files are searchable."),cancellationToken,folder);
             }
             var suffix=Guid.NewGuid().ToString("N");
             var next=state with

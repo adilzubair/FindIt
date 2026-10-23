@@ -21,6 +21,15 @@ public sealed class NativeEmbeddingProvider : IEmbeddingProvider
     public NativeEmbeddingProvider(RuntimePaths paths, bool media=false) { this.paths=paths; this.media=media; }
     public Task<float[]?> EmbedTextAsync(string text,bool query,CancellationToken cancellationToken=default) => RunAsync((h,r,c) => NativeMethods.fi_embed_text(h,text,query?1:0,r,r.Length,c,out var e) is var n ? (n,e) : default,cancellationToken);
     internal Task<float[]?> EmbedMediaAsync(string path,bool image,CancellationToken cancellationToken) => RunAsync((h,r,c) => NativeMethods.fi_embed_media(h,path,image?1:0,r,r.Length,c,out var e) is var n ? (n,e) : default,cancellationToken);
+    // Cleared when the loaded native runtime predates in-memory input (EntryPointNotFoundException).
+    internal bool InMemoryInput { get; set; } = true;
+    internal Task<float[]?> EmbedMediaAsync(byte[] data,bool image,CancellationToken cancellationToken) => RunAsync((h,r,c) => NativeMethods.fi_embed_media_buffer(h,data,(nuint)data.Length,image?1:0,r,r.Length,c,out var e) is var n ? (n,e) : default,cancellationToken);
+    internal Task<float[]?> EmbedFramesAsync(IReadOnlyList<byte[]> frames,CancellationToken cancellationToken) => RunAsync((h,r,c) =>
+    {
+        var handles=frames.Select(f=>GCHandle.Alloc(f,GCHandleType.Pinned)).ToArray();
+        try{return NativeMethods.fi_embed_frame_buffers(h,handles.Select(p=>p.AddrOfPinnedObject()).ToArray(),frames.Select(f=>(nuint)f.Length).ToArray(),frames.Count,r,r.Length,c,out var e) is var n ? (n,e) : default;}
+        finally{foreach(var handle in handles)handle.Free();}
+    },cancellationToken);
     internal Task<float[]?> EmbedFramesAsync(IReadOnlyList<string> paths,CancellationToken cancellationToken) => RunAsync((h,r,c) => NativeMethods.fi_embed_frames(h,string.Join('\n',paths),r,r.Length,c,out var e) is var n ? (n,e) : default,cancellationToken);
     private async Task<float[]?> RunAsync(Func<IntPtr,float[],IntPtr,(int Count,IntPtr Error)> action,CancellationToken token)
     {

@@ -26,18 +26,49 @@ public sealed class WorkerArchiveClient : IArchiveBackend
         catch { await client.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
-    public Task<ArchiveStatus> GetStatusAsync(CancellationToken cancellationToken = default) => _reader.CallAsync<ArchiveStatus>("archive.status", null, null, cancellationToken);
-    public Task<WorkerDiagnostics> GetDiagnosticsAsync(CancellationToken cancellationToken = default) => _reader.CallAsync<WorkerDiagnostics>("worker.diagnostics", null, null, cancellationToken);
-    public Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken = default) => _reader.CallAsync<SearchResponse>("archive.search", request, null, cancellationToken);
-    public async Task<IReadOnlyList<PersonRecord>> GetPeopleAsync(CancellationToken cancellationToken = default) => await _reader.CallAsync<List<PersonRecord>>("people.list", null, null, cancellationToken).ConfigureAwait(false);
-    public async Task<IReadOnlyList<PersonObservation>> GetPersonObservationsAsync(Guid personId, CancellationToken cancellationToken = default) => await _reader.CallAsync<List<PersonObservation>>("people.observations", new { personId }, null, cancellationToken).ConfigureAwait(false);
-    public Task<PreviewResult> GetPreviewAsync(PreviewRequest request, CancellationToken cancellationToken = default) => _reader.CallAsync<PreviewResult>("archive.preview", request, null, cancellationToken);
+    public Task<ArchiveStatus> GetStatusAsync(CancellationToken cancellationToken = default) => ReadAsync<ArchiveStatus>("archive.status", null, cancellationToken);
+    public Task<WorkerDiagnostics> GetDiagnosticsAsync(CancellationToken cancellationToken = default) => ReadAsync<WorkerDiagnostics>("worker.diagnostics", null, cancellationToken);
+    public Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken = default) => ReadAsync<SearchResponse>("archive.search", request, cancellationToken);
+    public async Task<IReadOnlyList<PersonRecord>> GetPeopleAsync(CancellationToken cancellationToken = default) => await ReadAsync<List<PersonRecord>>("people.list", null, cancellationToken).ConfigureAwait(false);
+    public async Task<IReadOnlyList<PersonObservation>> GetPersonObservationsAsync(Guid personId, CancellationToken cancellationToken = default) => await ReadAsync<List<PersonObservation>>("people.observations", new { personId }, cancellationToken).ConfigureAwait(false);
+    public Task<PreviewResult> GetPreviewAsync(PreviewRequest request, CancellationToken cancellationToken = default) => ReadAsync<PreviewResult>("archive.preview", request, cancellationToken);
+    public Task SaveRecentQueriesAsync(IReadOnlyList<string> queries, CancellationToken cancellationToken = default) => ReadAsync<bool>("preferences.recentQueries", new { queries }, cancellationToken);
+
+    // A native crash ends only the reader process. Start a new reader and retry the request once,
+    // rather than leaving every later search failing until the app is reopened. A reader that
+    // keeps dying is not restarted more than once every ten seconds.
+    private readonly SemaphoreSlim _readerGate = new(1);
+    private long _readerRestartedAt;
+    private async Task<T> ReadAsync<T>(string method, object? parameters, CancellationToken cancellationToken, bool retry = true)
+    {
+        var reader = _reader;
+        try { return await reader.CallAsync<T>(method, parameters, null, cancellationToken).ConfigureAwait(false); }
+        catch (Exception) when (retry && !reader.IsAlive && !cancellationToken.IsCancellationRequested && !_disposed)
+        {
+            if (!await RestartReaderAsync(reader).ConfigureAwait(false)) throw;
+        }
+        return await _reader.CallAsync<T>(method, parameters, null, cancellationToken).ConfigureAwait(false);
+    }
+    private async Task<bool> RestartReaderAsync(WorkerConnection failed)
+    {
+        await _readerGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!ReferenceEquals(failed, _reader)) return true;
+            if (_disposed || !Directory.Exists(RootPath) || (_readerRestartedAt != 0 && Stopwatch.GetElapsedTime(_readerRestartedAt) < TimeSpan.FromSeconds(10))) return false;
+            await failed.DisposeAsync().ConfigureAwait(false);
+            _reader = WorkerConnection.Start(RootPath, "reader"); _readerRestartedAt = Stopwatch.GetTimestamp();
+            return true;
+        }
+        finally { _readerGate.Release(); }
+    }
 
     public async Task<PersonRecord> SavePersonAsync(PersonUpdateRequest request, CancellationToken cancellationToken = default)
     {
         // Enrollment loads face models only in a separate, short-lived preparation process.
+        // Saving changes the drive, so a failed save is reported rather than repeated.
         if (request.ReferencePaths.Count == 0)
-            return await _reader.CallAsync<PersonRecord>("people.save", request, null, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync<PersonRecord>("people.save", request, cancellationToken, retry: false).ConfigureAwait(false);
         await _preparationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -55,8 +86,13 @@ public sealed class WorkerArchiveClient : IArchiveBackend
             _preparer = WorkerConnection.Start(RootPath, "preparer");
             await _preparer.CallAsync<ArchiveStatus>("archive.prepare", request, progress, cancellationToken).ConfigureAwait(false);
             // Reopen after publication; a reader never mutates its pinned generation beneath a query.
-            await _reader.DisposeAsync().ConfigureAwait(false);
-            _reader = WorkerConnection.Start(RootPath, "reader");
+            await _readerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _reader.DisposeAsync().ConfigureAwait(false);
+                _reader = WorkerConnection.Start(RootPath, "reader");
+            }
+            finally { _readerGate.Release(); }
             return await GetStatusAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -87,6 +123,8 @@ internal sealed class WorkerConnection : IAsyncDisposable
     private readonly Task _errorTask;
     private string _lastError = "";
     private bool _disposed;
+    /// <summary>False once the process has exited or its protocol stream ended.</summary>
+    public bool IsAlive => !_disposed && !_readTask.IsCompleted && !_process.HasExited;
 
     private WorkerConnection(Process process)
     {
