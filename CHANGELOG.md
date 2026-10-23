@@ -4,10 +4,6 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
-### Fixed
-
-- The build pins FFmpeg to BtbN's month-end `n8.1.3-9-g29e619e767` LGPL build. The previously pinned daily build no longer matched its checksum upstream and would have been deleted. The third-party notice now states FFmpeg's license as LGPL-3.0-or-later, matching the build's `--enable-version3` configuration.
-
 ## [0.1.0-preview.9] - 2026-10-23
 
 First version prepared for public release. Earlier previews were distributed privately for testing.
@@ -36,6 +32,7 @@ First version prepared for public release. Earlier previews were distributed pri
 - FAT32 drives no longer re-hash every archive artifact at each launch (worker ready time on the test stick: 30 s → 0.3 s).
 - Previews are blocked when an original's size or modification time changed since preparation.
 - Resumed preparation and sampled-person playback edge cases.
+- The build pins FFmpeg to BtbN's month-end `n8.1.3-9-g29e619e767` LGPL build. The previously pinned daily build no longer matched its checksum upstream and would have been deleted. The third-party notice now states FFmpeg's license as LGPL-3.0-or-later, matching the build's `--enable-version3` configuration.
 
 ## [0.1.0-preview.1] - 2026-10-21
 
