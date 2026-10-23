@@ -92,6 +92,6 @@ These tools write only beneath `artifacts/` or their own marked fixtures, and re
 ## Code conventions
 
 - Keep the UI free of inference; heavy or native work belongs in the worker.
-- Pin every external download by URL and SHA-256.
+- Pin every external download by URL and SHA-256, and prefer URLs that stay put: tagged releases, commit archives and, for FFmpeg, BtbN's month-end `autobuild-YYYY-MM-DD` releases (daily builds are deleted after a few weeks).
 - Fault-injection code compiles only with `-p:FindItEnableFaultInjection=true` and must never reach a published package.
 - Add a regression test with each fix. Tests that need optional native pieces should call `Assert.Inconclusive` when they are missing.
