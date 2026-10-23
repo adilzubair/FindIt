@@ -13,7 +13,7 @@ FindIt uses the following third-party software and model artifacts. Preserve the
 | YuNet / SFace | [opencv/opencv_zoo](https://github.com/opencv/opencv_zoo); detector MIT; recognizer Apache-2.0 |
 | whisper.cpp / Whisper small | [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp) v1.9.5, [openai/whisper](https://github.com/openai/whisper); MIT |
 | Silero VAD | [snakers4/silero-vad](https://github.com/snakers4/silero-vad), [GGML conversion](https://huggingface.co/ggml-org/whisper-vad); MIT |
-| FFmpeg | LGPL build `n8.1.3-18-g46d899d7a0` from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-20-13-08); LGPL-2.1-or-later; build scripts and source provenance in `licenses/SOURCES.txt` |
+| FFmpeg | LGPL build `n8.1.3-9-g29e619e767` from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08), a month-end build that BtbN keeps long term; LGPL-3.0-or-later (built with `--enable-version3`); build scripts and source provenance in `licenses/SOURCES.txt` |
 | LibVLC | [VideoLAN.LibVLC.Windows](https://code.videolan.org/videolan/libvlc-nuget) 3.0.24; LGPL-2.1-or-later package; modular codecs/plugins carry their own accompanying terms |
 | PDFium | Chromium PDFium build 8111 from [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries); BSD-style and accompanying third-party notices |
 | Tesseract / Leptonica / tessdata | [tesseract-ocr](https://github.com/tesseract-ocr), [charlesw/tesseract](https://github.com/charlesw/tesseract), [DanBloomberg/leptonica](https://github.com/DanBloomberg/leptonica); Apache-2.0 / BSD-style |

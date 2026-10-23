@@ -23,7 +23,7 @@ if(!$SkipTools) {
         @('https://github.com/ggml-org/llama.cpp/archive/4d756bc72bf00a4aacf410ae15a2d315f3db400d.zip','llama.zip','43b717fdaf7b5a0996028b7d8f79880b4ad918e9b15948d7ec2fc67d18860b19'),
         @('https://github.com/unum-cloud/USearch/archive/7a4abfb2033935498256044e01bc0049ec80d76c.zip','usearch.zip','0db638149781d916a6a14c7ab287d439e97bad0a4c30cbfce687f14e93c5e9ab'),
         @('https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.5.zip','whisper.zip','7a7a73071939f16bc028ad2f713f16f26e37afb6cc155d0f19e3d65705d2b1d9'),
-        @('https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-n8.1.3-18-g46d899d7a0-win64-lgpl-8.1.zip','ffmpeg.zip','88bd75db73a3ddf2222cbfe302d64b3bc8126a144cccb24806bc9de78264499d'),
+        @('https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip','ffmpeg.zip','4a7642b2264c03e8a0ce8a3825b933ee5580656f45695a086fe7e294045ffc0a'),
         @('https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8111/pdfium-win-x64.tgz','pdfium.tgz','3452d11031050ec65e57f180215b57b9e6d465e3fbedafa8a77ad90885c7d23e'),
         @('https://github.com/ggml-org/llama.cpp/releases/download/b11461/llama-b11461-bin-win-vulkan-x64.zip','llama-vulkan.zip','6b9ca8ad3e43ac3e166d1997875709e4547214bb5bf1c2ebfdd17a2350a8380c')
     )
@@ -58,9 +58,9 @@ if(!$SkipTools) {
     )
     foreach($notice in $notices){$target=Join-Path runtime/licenses $notice[1];if(!(Test-Path -LiteralPath $target)){Invoke-WebRequest $notice[0] -OutFile $target}}
     @'
-FFmpeg build: https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-20-13-08
+FFmpeg build: https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08
 Source/build scripts: https://github.com/BtbN/FFmpeg-Builds
-FFmpeg source version: n8.1.3-18-g46d899d7a0. LGPL build; no GPL/nonfree configuration.
+FFmpeg source version: n8.1.3-9-g29e619e767. LGPL version 3 build (--enable-version3); no GPL/nonfree configuration.
 Exact binary SHA-256 is pinned in scripts/Fetch-Dependencies.ps1.
 Microsoft C++ runtime: official Microsoft.VCLibs.x64.14.00.Desktop.appx from https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx, extracted app-locally; no system installation.
 Model provenance and weight licenses are recorded in models/manifest.json.
