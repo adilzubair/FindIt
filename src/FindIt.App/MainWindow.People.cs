@@ -340,7 +340,7 @@ public partial class MainWindow
     }
     private async void MomentThumbnailLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is Image { DataContext: SearchMoment moment } image) { image.Visibility = moment.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible; image.Height = 48; await FillPortraitAsync(image, moment.Thumbnail); }
+        if (sender is Image { DataContext: MomentGroup moment } image) { image.Visibility = moment.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible; await FillPortraitAsync(image, moment.Thumbnail); }
     }
     private void MergePersonClick(object sender, RoutedEventArgs e)
     {

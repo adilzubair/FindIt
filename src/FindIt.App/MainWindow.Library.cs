@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -27,7 +28,7 @@ public partial class MainWindow
     private readonly Dictionary<PersonTile, CancellationTokenSource> _portraitRequests = [];
     public ObservableCollection<PersonRow> PeopleRows { get; } = [];
     private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
-    private bool _pollingPlayback, _seeking, _resizingInspector;
+    private bool _pollingPlayback, _resizingInspector;
 
     private void CaptureFilterState()
     {
@@ -293,8 +294,10 @@ public partial class MainWindow
         SearchHeadingRow.Visibility = Visibility.Visible;
         PaginationBar.Visibility = _status.FileCount == 0 ? Visibility.Collapsed : Visibility.Visible;
         var timedMedia = _preview?.Kind is FileKind.Video or FileKind.Audio;
+        // Video fills the panel's width at 16:9 where the window is tall enough; audio needs no picture.
+        var videoWidth = sheet ? PreviewPanel.Width : _inspectorWidth;
         var mediaHeight = timedMedia
-            ? Math.Min(ActualHeight < 650 ? 120 : ActualHeight < 820 ? 190 : 240, Math.Max(64, ResultsArea.ActualHeight - 260))
+            ? Math.Min(_preview?.Kind == FileKind.Audio ? 120 : Math.Min((videoWidth - 34) * 9 / 16, ActualHeight < 650 ? 140 : ActualHeight < 820 ? 210 : 320), Math.Max(64, ResultsArea.ActualHeight - 260))
             : Math.Min(ActualHeight < 650 ? 130 : 240, Math.Max(40, ResultsArea.ActualHeight - 192));
         PreviewMediaRow.Height = new GridLength(_preview?.Kind == FileKind.Document && PreviewImage.Source is null ? 0 : mediaHeight);
         MomentsHeading.Margin = timedMedia && ActualHeight < 820 ? new Thickness(0, 10, 0, 6) : new Thickness(0, 16, 0, 8);
@@ -419,46 +422,126 @@ public partial class MainWindow
         {
             var state = await player.GetStateAsync();
             if (!ReferenceEquals(player, _player) || !ReferenceEquals(selected, _selectedResult)) return;
-            PreviewTime.Text = $"{FormatTime(state.PositionMs)} / {FormatTime(state.DurationMs)}";
-            PlayPauseButton.Content = state.Playing ? "" : "";
-            if (state.DurationMs > 0 && state.DurationMs != _markedDuration) PlaceMomentMarkers(state.DurationMs);
-            AutomationProperties.SetName(PlayPauseButton, state.Playing ? "Pause playback" : "Play playback");
-            PlaybackSeek.Maximum = Math.Max(1, state.DurationMs);
-            if (!_seeking) PlaybackSeek.Value = state.PositionMs;
-            PlaybackSeek.IsEnabled = state.DurationMs > 0;
+            // The player reports its old clock for a moment after a seek; don't jump the thumb back.
+            var settling = _seekBusy || Stopwatch.GetElapsedTime(_seekRequestedAt) < TimeSpan.FromMilliseconds(700) && Math.Abs(state.PositionMs - _seekTarget) > 1500;
+            ShowTimeline(settling ? state with { PositionMs = PlaybackTimeline.PositionMs } : state);
+            if (state.Playing) ShowDecodedVideo();
         }
         catch (Exception) { StopPlaybackPolling(); }
         finally { _pollingPlayback = false; }
     }
-    private long _markedDuration;
-    private IReadOnlyList<SearchMoment> _markerMoments = [];
-    // Matching moments as ticks on the timeline; each tick opens that moment.
-    private void PlaceMomentMarkers(long durationMs)
+    private IReadOnlyList<MomentGroup> _momentGroups = [];
+    private IReadOnlyList<PreviewFrame> _frames = [];
+    private bool _seekBusy, _muted, _playing;
+    private int _frameVersion;
+    private long? _pendingSeek;
+    private long _seekTarget, _seekRequestedAt;
+    private void ShowTimeline(PlaybackState state)
     {
-        _markedDuration = durationMs; MomentMarkers.Children.Clear();
-        var width = MomentMarkers.ActualWidth;
-        if (width <= 0) return;
-        foreach (var moment in _markerMoments)
+        if (state.DurationMs > 0 && state.DurationMs != PlaybackTimeline.DurationMs)
         {
-            if ((moment.PersonEvidence.FirstOrDefault()?.StartMs ?? moment.StartMs) is not long at || at < 0 || at > durationMs) continue;
-            var marker = new Button { Width = 6, Height = 16, MinHeight = 0, Padding = new Thickness(0), BorderThickness = new Thickness(1.5), Tag = moment, ToolTip = $"{moment.Label} · {FormatTime(at)}", Cursor = Cursors.Hand };
-            marker.Style = (Style)FindResource("TimelineMarker");
-            marker.SetResourceReference(BackgroundProperty, moment.PersonEvidence.Count > 0 ? "VideoInkBrush" : "AccentBrush");
-            marker.SetResourceReference(BorderBrushProperty, "SurfaceBrush");
-            AutomationProperties.SetName(marker, $"Jump to {FormatTime(at)}, {moment.Label}");
-            marker.Click += MomentClick;
-            Canvas.SetLeft(marker, width * at / durationMs - 3);
-            MomentMarkers.Children.Add(marker);
+            PlaybackTimeline.DurationMs = state.DurationMs;
+            PlaybackTimeline.Ranges = _momentGroups.Where(g => g.StartMs is not null).Select(g => new TimelineRange(g.StartMs!.Value, g.EndMs ?? g.StartMs!.Value, g.HasPerson)).ToArray();
         }
+        if (!PlaybackTimeline.IsScrubbing) PlaybackTimeline.PositionMs = state.PositionMs;
+        var position = PlaybackTimeline.PositionMs;
+        PreviewTime.Text = state.DurationMs > 0 ? $"{FormatTime(position)} / {FormatTime(state.DurationMs)}" : FormatTime(position);
+        _playing = state.Playing;
+        PlayPauseButton.Content = state.Playing ? "\uE769" : "\uE768";
+        AutomationProperties.SetName(PlayPauseButton, state.Playing ? "Pause playback" : "Play playback");
+        foreach (var group in _momentGroups) group.IsActive = group.Contains(position);
+        PreviousMomentButton.IsEnabled = _momentGroups.Any(g => g.StartMs < position - 1000);
+        NextMomentButton.IsEnabled = _momentGroups.Any(g => g.StartMs > position + 500);
     }
-    private void SeekStarted(object sender, MouseButtonEventArgs e) => _seeking = true;
-    private async void SeekReleased(object sender, MouseButtonEventArgs e) { _seeking = false; await SeekToSliderAsync(); }
-    private void SeekKeyStarted(object sender, KeyEventArgs e) { if (e.Key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown) _seeking = true; }
-    private async void SeekKeyReleased(object sender, KeyEventArgs e) { if (e.Key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown) { _seeking = false; await SeekToSliderAsync(); } }
-    private async Task SeekToSliderAsync()
+    // Seeks run one at a time; a drag that moves on meanwhile only keeps its latest position.
+    private async void TimelineSeek(long ms, bool final)
+    {
+        PreviewTime.Text = $"{FormatTime(ms)} / {FormatTime(PlaybackTimeline.DurationMs)}";
+        foreach (var group in _momentGroups) group.IsActive = group.Contains(ms);
+        if (!_playing) ShowFrameAt(ms);
+        _pendingSeek = ms;
+        if (_seekBusy || _player is not { } player) return;
+        _seekBusy = true;
+        try
+        {
+            while (_pendingSeek is long target && ReferenceEquals(player, _player))
+            {
+                _pendingSeek = null; _seekTarget = target; _seekRequestedAt = Stopwatch.GetTimestamp();
+                await player.SeekAsync(target); if (_playing) ShowDecodedVideo();
+                if (PlaybackTimeline.IsScrubbing) await Task.Delay(80);
+            }
+        }
+        catch (Exception ex) { Notice($"Could not seek: {ex.Message}"); }
+        finally { _seekBusy = false; _seekRequestedAt = Stopwatch.GetTimestamp(); }
+    }
+    private async Task PlayFromAsync(long ms)
+    {
+        if (_player is not { } player) return;
+        PlaybackTimeline.PositionMs = ms; TimelineSeek(ms, true);
+        try { var state = await player.GetStateAsync(); if (!state.Playing) state = await player.PauseAsync(); ShowDecodedVideo(); ShowTimeline(state with { Playing = true }); }
+        catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); }
+    }
+    // A paused player draws nothing after a seek, so the prepared frame nearest that time stands in
+    // until playback runs again.
+    private async void ShowFrameAt(long ms)
+    {
+        if (_preview?.Kind != FileKind.Video || NearestFrame(ms) is not { } frame) return;
+        var version = ++_frameVersion;
+        try
+        {
+            var image = await _thumbnails.ReadAsync(frame.Thumbnail, CancellationToken.None);
+            if (version != _frameVersion || image is null || _preview?.Kind != FileKind.Video) return;
+            PreviewImage.Source = image; PreviewImage.ToolTip = null; _showingPreparedFrame = true; VideoPlayer.Visibility = Visibility.Hidden;
+        }
+        catch (Exception) { /* The player's own picture returns when it plays. */ }
+    }
+    // The frame prepared nearest a time, for the poster and the picture shown above the timeline.
+    private PreviewFrame? NearestFrame(long ms)
+    {
+        var frames = _frames.Count > 0 ? _frames : _preview?.Frames ?? [];
+        if (frames.Count == 0) return null;
+        int low = 0, high = frames.Count - 1;
+        while (low < high) { var middle = (low + high) / 2; if (frames[middle].StartMs < ms) low = middle + 1; else high = middle; }
+        return low > 0 && ms - frames[low - 1].StartMs < Math.Abs(frames[low].StartMs - ms) ? frames[low - 1] : frames[low];
+    }
+    private PreviewFrame? _hoverFrame;
+    private async void TimelineHover(long? ms, double x)
+    {
+        if (ms is not long at || _preview is null) { TimelinePopup.IsOpen = false; _hoverFrame = null; return; }
+        TimelinePopupTime.Text = FormatTime(at);
+        var frame = NearestFrame(at);
+        TimelinePopupFrame.Visibility = frame is null ? Visibility.Collapsed : Visibility.Visible;
+        TimelinePopup.HorizontalOffset = x - (frame is null ? 24 : 83);
+        TimelinePopup.IsOpen = true;
+        if (frame is null || ReferenceEquals(frame, _hoverFrame)) return;
+        _hoverFrame = frame;
+        try { var image = await _thumbnails.ReadAsync(frame.Thumbnail, CancellationToken.None); if (ReferenceEquals(frame, _hoverFrame)) TimelinePopupImage.Source = image; }
+        catch (Exception) { /* A missing frame only leaves the time showing. */ }
+    }
+    private async void TimelineKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space) { e.Handled = true; await TogglePlaybackAsync(); }
+        else if (e.Key is Key.PageUp or Key.PageDown) { e.Handled = true; await JumpToMomentAsync(e.Key == Key.PageDown ? 1 : -1); }
+    }
+    private async void PreviousMomentClick(object sender, RoutedEventArgs e) => await JumpToMomentAsync(-1);
+    private async void NextMomentClick(object sender, RoutedEventArgs e) => await JumpToMomentAsync(1);
+    private async Task JumpToMomentAsync(int direction)
+    {
+        var position = PlaybackTimeline.PositionMs;
+        var starts = _momentGroups.Where(g => g.StartMs is not null).Select(g => g.StartMs!.Value).ToArray();
+        // Within a second of a moment's start, "previous" means the one before it.
+        long? target = direction > 0 ? starts.Where(s => s > position + 500).Cast<long?>().FirstOrDefault() : starts.Where(s => s < position - 1000).Cast<long?>().LastOrDefault();
+        if (target is long at) await PlayFromAsync(at);
+    }
+    private async void MuteClick(object sender, RoutedEventArgs e)
     {
         if (_player is null) return;
-        try { await _player.SeekAsync((long)PlaybackSeek.Value); ShowDecodedVideo(); }
-        catch (Exception ex) { Notice($"Could not seek: {ex.Message}"); }
+        try
+        {
+            await _player.SetVolumeAsync(_muted ? 100 : 0); _muted = !_muted;
+            MuteGlyph.Text = _muted ? "\uE74F" : "\uE767";
+            AutomationProperties.SetName(MuteButton, _muted ? "Unmute" : "Mute"); MuteButton.ToolTip = _muted ? "Unmute" : "Mute";
+        }
+        catch (Exception ex) { Notice($"Could not change the volume: {ex.Message}"); }
     }
 }

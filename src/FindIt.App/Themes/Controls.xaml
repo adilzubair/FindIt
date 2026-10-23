@@ -46,7 +46,6 @@
     </ControlTemplate></Setter.Value></Setter></Style>
 
   <!-- A matching-moment tick on the playback timeline. -->
-  <Style x:Key="TimelineMarker" TargetType="Button"><Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3"/></ControlTemplate></Setter.Value></Setter></Style>
 
   <!-- Navigation rail item: icon above a short label, with the Windows 11 selection pill. -->
   <Style x:Key="RailButton" TargetType="ToggleButton">

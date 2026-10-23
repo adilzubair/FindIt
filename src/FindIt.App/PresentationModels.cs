@@ -63,7 +63,7 @@ public static class MatchReason
     public static string? Short(SearchResult result)
     {
         if (result.MatchCategory == MatchCategory.Browse) return null;
-        var moment = result.Moments.FirstOrDefault();
+        var moment = result.Moments.MinBy(m => m.Rank);
         var evidence = moment?.PersonEvidence.FirstOrDefault();
         if (evidence is not null) return Join(evidence.Name, evidence.StartMs ?? moment?.StartMs);
         if (result.MatchingPeople.Count > 0) return string.Join(", ", result.MatchingPeople.Take(2));
@@ -80,7 +80,7 @@ public static class MatchReason
     public static string Long(SearchResult result)
     {
         if (result.MatchCategory == MatchCategory.Browse) return "";
-        var moment = result.Moments.FirstOrDefault();
+        var moment = result.Moments.MinBy(m => m.Rank);
         var evidence = moment?.PersonEvidence.FirstOrDefault();
         if (evidence is not null) return $"{evidence.Name} ({(evidence.Confirmed ? "confirmed" : "possible")}){At(evidence.StartMs ?? moment?.StartMs)}";
         if (!string.IsNullOrWhiteSpace(moment?.Text)) return $"“{Clip(moment.Text)}”{At(moment.StartMs)}";
@@ -90,34 +90,6 @@ public static class MatchReason
     private static string Join(string label, long? milliseconds) => milliseconds is long at ? $"{label} · {ClockFormat.Format(at)}" : label;
     private static string At(long? milliseconds) => milliseconds is long at ? $" at {ClockFormat.Format(at)}" : "";
     private static string Clip(string text) { var single = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)); return single.Length > 80 ? single[..79] + "…" : single; }
-}
-
-/// <summary>Media positions as people read them: 0:06, 4:05, 1:02:10.</summary>
-public static class ClockFormat
-{
-    public static string Format(long milliseconds)
-    {
-        var time = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
-        return time.TotalHours >= 1 ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}" : $"{time.Minutes}:{time.Seconds:00}";
-    }
-}
-
-public sealed class MomentTimeConverter : IValueConverter
-{
-    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-    {
-        var moment = value as SearchMoment;
-        var time = moment is null ? null : moment.PersonEvidence.FirstOrDefault()?.StartMs ?? moment.StartMs;
-        if (targetType == typeof(Visibility)) return time is null ? Visibility.Collapsed : Visibility.Visible;
-        if (parameter as string == "title" && moment is not null)
-        {
-            // Worker labels end with a machine timestamp; the thumbnail chip already shows the time.
-            var title = System.Text.RegularExpressions.Regex.Replace(moment.Label, @"(\s·\s)?\d{2}:\d{2}:\d{2}(\.\d{1,3})?$", "").Trim();
-            return title.Length > 0 ? title : moment.Kind switch { SegmentKind.Transcript or SegmentKind.Audio => "Speech", SegmentKind.VideoClip or SegmentKind.VideoFrame => "Scene", SegmentKind.Image => "Image", _ => "Text" };
-        }
-        return time is long at ? ClockFormat.Format(at) : "";
-    }
-    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 }
 
 public sealed class FolderIndentConverter : IValueConverter

@@ -61,6 +61,7 @@ public sealed partial class ArchiveService
         Guid[] personIds, IReadOnlyList<PersonRecord> people, bool ranked, CancellationToken token)
     {
         var results = new List<SearchResult>();
+        using var frames = new NearestFrames(db);
         foreach (var file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -86,9 +87,10 @@ public sealed partial class ArchiveService
                 }
             }
             if (result is null || moments.Count != file.Segments.Length) throw new InvalidDataException("A frozen search result is missing from the archive catalog.");
-            var first = moments[file.Segments[0]];
+            var strongest = file.Segments.Select((id, rank) => frames.Fill(result.Kind, file.Id, moments[id] with { Rank = rank })).ToArray();
+            var first = strongest[0];
             results.Add(DecoratePersonResult(db, result with { Thumbnail = first.Thumbnail, Snippet = Snippet(first.Text, tokens),
-                Moments = file.Segments.Select(id => moments[id]).OrderBy(m => m.StartMs ?? 0).ThenBy(m => m.Page ?? 0).ToArray() }, personIds));
+                Moments = strongest.OrderBy(m => m.StartMs ?? 0).ThenBy(m => m.Page ?? 0).ToArray() }, personIds));
         }
         return results.ToArray();
     }

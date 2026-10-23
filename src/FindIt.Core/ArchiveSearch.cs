@@ -437,6 +437,47 @@ public sealed partial class ArchiveService
             evidence = ReadPersonEvidence(db, request.FileId, selectedMoment, personIds, observation);
             if (!evidence.Any(e => e.ObservationId == observation)) throw new FileNotFoundException("The selected face evidence is no longer accepted for this moment.");
         }
-        return new PreviewResult { FileId = request.FileId, OriginalPath = original, Kind = kind, Text = selectedMoment?.Text ?? "", StartMs = evidence.FirstOrDefault()?.StartMs ?? selectedMoment?.StartMs, Page = selectedMoment?.Page, PersonEvidence = evidence, Moments = moments };
+        return new PreviewResult { FileId = request.FileId, OriginalPath = original, Kind = kind, Text = selectedMoment?.Text ?? "", StartMs = evidence.FirstOrDefault()?.StartMs ?? selectedMoment?.StartMs, Page = selectedMoment?.Page, PersonEvidence = evidence, Moments = moments,
+            Frames = kind == FileKind.Video ? SampledFrames(db, request.FileId) : [] };
+    }
+
+    // At most 400 frames spread over the recording: every sample of a short clip, thinner for a long
+    // one. Only the kept rows' thumbnail references are parsed.
+    private static PreviewFrame[] SampledFrames(SqliteConnection db, Guid file)
+    {
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT start_ms,thumbnail FROM segments WHERE file_id=$id AND kind=$kind AND start_ms IS NOT NULL AND thumbnail IS NOT NULL ORDER BY start_ms;";
+        command.Parameters.AddWithValue("$id", file.ToString("D")); command.Parameters.AddWithValue("$kind", (int)SegmentKind.VideoFrame);
+        var rows = new List<(long StartMs, string Thumbnail)>();
+        using (var reader = command.ExecuteReader()) while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1)));
+        var step = Math.Max(1, (rows.Count + 399) / 400);
+        return rows.Where((_, index) => index % step == 0).Select(row => new PreviewFrame(row.StartMs, Blob(row.Thumbnail)!)).ToArray();
+    }
+
+    // Only sampled video frames store a picture. A scene window, speech or sound match shows the
+    // frame sampled nearest its start, so its result tile and moment are never blank.
+    private sealed class NearestFrames : IDisposable
+    {
+        private readonly SqliteCommand command;
+        private readonly SqliteParameter file, start;
+        public NearestFrames(SqliteConnection db)
+        {
+            command = db.CreateCommand();
+            command.CommandText = """
+                SELECT thumbnail FROM (
+                  SELECT * FROM (SELECT thumbnail,start_ms-$start AS gap FROM segments WHERE file_id=$file AND start_ms>=$start AND thumbnail IS NOT NULL ORDER BY start_ms LIMIT 1)
+                  UNION ALL
+                  SELECT * FROM (SELECT thumbnail,$start-start_ms AS gap FROM segments WHERE file_id=$file AND start_ms<$start AND thumbnail IS NOT NULL ORDER BY start_ms DESC LIMIT 1))
+                ORDER BY gap LIMIT 1;
+                """;
+            file = command.Parameters.Add("$file", SqliteType.Text); start = command.Parameters.Add("$start", SqliteType.Integer);
+        }
+        public SearchMoment Fill(FileKind kind, Guid fileId, SearchMoment moment)
+        {
+            if (moment.Thumbnail is not null || kind != FileKind.Video || moment.StartMs is not long at) return moment;
+            file.Value = fileId.ToString("D"); start.Value = at;
+            return command.ExecuteScalar() is string json ? moment with { Thumbnail = Blob(json) } : moment;
+        }
+        public void Dispose() => command.Dispose();
     }
 }

@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using FindIt.Shared;
 
 namespace FindIt.App;
@@ -8,7 +10,8 @@ internal static class ResultPreview
 {
     public static PreviewRequest Request(SearchResult result, long? segmentId = null)
     {
-        var moment = segmentId is long selected ? result.Moments.FirstOrDefault(m => m.SegmentId == selected) : result.Moments.FirstOrDefault();
+        // Without a chosen moment, open at the strongest match rather than the earliest.
+        var moment = segmentId is long selected ? result.Moments.FirstOrDefault(m => m.SegmentId == selected) : result.Moments.MinBy(m => m.Rank);
         return new(result.FileId, segmentId ?? moment?.SegmentId, moment?.PersonEvidence.FirstOrDefault()?.ObservationId, result.MatchedPersonIds);
     }
 }
@@ -106,5 +109,81 @@ internal sealed record LibraryFilterState(
     {
         var localDate = DateTime.SpecifyKind(value.Date, DateTimeKind.Unspecified);
         return new DateTimeOffset(localDate, zone.GetUtcOffset(localDate)).ToUniversalTime();
+    }
+}
+
+/// <summary>Media positions as people read them: 0:06, 4:05, 1:02:10.</summary>
+public static class ClockFormat
+{
+    public static string Format(long milliseconds)
+    {
+        var time = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
+        return time.TotalHours >= 1 ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}" : $"{time.Minutes}:{time.Seconds:00}";
+    }
+}
+
+/// <summary>
+/// One matching moment as a viewer sees it. A scene window, the frames sampled inside it and the
+/// speech over it are separate matches in the catalog but a single place in the recording.
+/// </summary>
+public sealed class MomentGroup : INotifyPropertyChanged
+{
+    // Matches this close together read as one moment.
+    private const long JoinMs = 1500;
+    /// <summary>The match opened for this moment: one with face evidence first, then the strongest.</summary>
+    public required SearchMoment Lead { get; init; }
+    public long? StartMs { get; init; }
+    public long? EndMs { get; init; }
+    public string Title { get; init; } = "";
+    public string Text { get; init; } = "";
+    public BlobReference? Thumbnail { get; init; }
+    public bool IsBest { get; init; }
+    public bool HasPerson => Lead.PersonEvidence.Count > 0;
+    public string TimeLabel => StartMs is not long start ? "" : EndMs is long end && end - start >= JoinMs ? $"{ClockFormat.Format(start)}–{ClockFormat.Format(end)}" : ClockFormat.Format(start);
+    public bool HasTime => StartMs is not null;
+    public bool HasText => Text.Length > 0;
+    public string AccessibleName => $"{(IsActive ? "Playing, " : "")}{(IsBest ? "Best match, " : "")}{Title}{(TimeLabel.Length > 0 ? " at " + TimeLabel.Replace("–", " to ") : "")}{(Text.Length > 0 ? ". " + Text : "")}";
+    private bool _isActive;
+    public bool IsActive { get => _isActive; set { if (_isActive == value) return; _isActive = value; Changed(); Changed(nameof(AccessibleName)); } }
+    public bool Contains(long ms) => StartMs is long start && ms >= start - 250 && ms <= (EndMs ?? start) + 250;
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
+
+    public static IReadOnlyList<MomentGroup> Build(IReadOnlyList<SearchMoment> moments)
+    {
+        // Pages and photos have no time, so each stays its own entry in the order given.
+        var sets = moments.Where(m => Time(m) is null).Select(m => new List<SearchMoment> { m }).ToList();
+        List<SearchMoment>? current = null; long currentEnd = 0;
+        foreach (var moment in moments.Where(m => Time(m) is not null).OrderBy(m => Time(m)))
+        {
+            var start = Time(moment)!.Value;
+            if (current is null || start > currentEnd + JoinMs) { sets.Add(current = []); currentEnd = start; }
+            current.Add(moment); currentEnd = Math.Max(currentEnd, Math.Max(start, moment.EndMs ?? start));
+        }
+        // Marking the strongest only helps when there is a choice.
+        return sets.Select(set => From(set, sets.Count > 1)).ToArray();
+    }
+    private static long? Time(SearchMoment moment) => moment.PersonEvidence.FirstOrDefault()?.StartMs ?? moment.StartMs;
+    private static MomentGroup From(IReadOnlyList<SearchMoment> members, bool markBest)
+    {
+        var lead = members.OrderBy(m => m.PersonEvidence.Count > 0 ? 0 : 1).ThenBy(m => m.Rank).First();
+        var start = members.Select(Time).Min();
+        long? end = start is null ? null : members.Max(m => Math.Max(Time(m) ?? 0, m.EndMs ?? Time(m) ?? 0));
+        var names = members.SelectMany(m => m.PersonEvidence).Select(e => e.Name).Distinct().Take(2);
+        var kinds = members.Select(m => m.Kind switch
+        {
+            SegmentKind.VideoClip or SegmentKind.VideoFrame => "Scene", SegmentKind.Transcript => "Speech", SegmentKind.Audio => "Sound",
+            SegmentKind.DocumentPage when m.Page is int page => $"Page {page}", SegmentKind.Image => "Image", _ => "Text"
+        }).Distinct();
+        var speech = members.Where(m => m.Kind is SegmentKind.Transcript or SegmentKind.DocumentPage or SegmentKind.Text && !string.IsNullOrWhiteSpace(m.Text))
+            .OrderBy(m => m.StartMs ?? 0).Select(m => string.Join(' ', m.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))).Distinct();
+        var text = string.Join(" … ", speech);
+        return new()
+        {
+            Lead = lead, StartMs = start, EndMs = end, Title = string.Join(" · ", names.Concat(kinds)),
+            Text = text.Length > 160 ? text[..159] + "…" : text,
+            Thumbnail = lead.PersonEvidence.FirstOrDefault()?.Thumbnail ?? lead.Thumbnail ?? members.OrderBy(m => Time(m) ?? 0).Select(m => m.Thumbnail).FirstOrDefault(t => t is not null),
+            IsBest = markBest && members.Any(m => m.Rank == 0)
+        };
     }
 }

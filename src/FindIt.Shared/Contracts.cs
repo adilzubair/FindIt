@@ -79,6 +79,8 @@ public sealed record SearchMoment
     public string Label { get; init; } = "";
     public string Text { get; init; } = "";
     public BlobReference? Thumbnail { get; init; }
+    /// <summary>Strength among the file's matches, 0 for the strongest. Preview listings leave it 0.</summary>
+    public int Rank { get; init; }
     // Face observations are samples, not proof of continuous presence or an action.
     public IReadOnlyList<PersonEvidence> PersonEvidence { get; init; } = [];
 }
@@ -203,7 +205,10 @@ public sealed record PreviewResult
     public int? Page { get; init; }
     public IReadOnlyList<PersonEvidence> PersonEvidence { get; init; } = [];
     public IReadOnlyList<SearchMoment> Moments { get; init; } = [];
+    /// <summary>A video's sampled frames, evenly thinned, for showing a picture while seeking.</summary>
+    public IReadOnlyList<PreviewFrame> Frames { get; init; } = [];
 }
+public sealed record PreviewFrame(long StartMs, BlobReference Thumbnail);
 
 public interface IArchiveBackend : IAsyncDisposable
 {
