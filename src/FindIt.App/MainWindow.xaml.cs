@@ -63,6 +63,7 @@ public partial class MainWindow : Window
         _root = Path.GetFullPath(rootPath ?? backend?.RootPath ?? AppContext.BaseDirectory);
         _thumbnails = new(_root);
         InitializeComponent();
+        PlaybackTimeline.Seek += TimelineSeek; PlaybackTimeline.Hover += TimelineHover;
         FiltersPopup.CustomPopupPlacementCallback = (popup, target, offset) => [new(new Point(target.Width - popup.Width, target.Height), System.Windows.Controls.Primitives.PopupPrimaryAxis.Vertical), new(new Point(target.Width - popup.Width, -popup.Height), System.Windows.Controls.Primitives.PopupPrimaryAxis.Vertical)];
         _uiReady = true;
         InitializeAppearance();
@@ -128,7 +129,7 @@ public partial class MainWindow : Window
         if (_preview?.Kind != FileKind.Video) return;
         // RenderTargetBitmap cannot capture a foreign HWND. Show the actual indexed frame in captures.
         var evidence = _preview.PersonEvidence.FirstOrDefault();
-        var frame = evidence?.Thumbnail ?? evidence?.Portrait ?? _preview.Moments.FirstOrDefault(m => m.StartMs == _preview.StartMs)?.Thumbnail ?? _selectedResult?.Thumbnail;
+        var frame = evidence?.Thumbnail ?? evidence?.Portrait ?? NearestFrame(_preview.StartMs ?? 0)?.Thumbnail ?? _selectedResult?.Thumbnail;
         PreviewImage.Source = await _thumbnails.ReadAsync(frame, CancellationToken.None);
         VideoPlayer.Visibility = Visibility.Collapsed;
         FooterStatus.Text += " · Video surface shown as its indexed frame";
@@ -590,7 +591,7 @@ public partial class MainWindow : Window
         var cancellation = _previewCancellation = new();
         _selectedResult = result; _lastResultId = result.FileId; _preview = null; StopPlayback();
         foreach (var tile in CurrentTiles) tile.IsSelected = tile.Result.FileId == result.FileId;
-        MomentsList.ItemsSource = null; MomentsHeading.Visibility = Visibility.Collapsed; MomentMarkers.Children.Clear(); _markedDuration = 0;
+        MomentsList.ItemsSource = null; MomentsHeading.Visibility = Visibility.Collapsed; _momentGroups = []; _frames = [];
         PreviewName.Text = result.Name; PreviewPath.Text = result.RelativePath.Replace('\\', '/').Replace("/", " › "); SetPreviewText(result.Snippet);
         PreviewMediaRow.Height = new GridLength(200);
         PreviewImage.Source = null; PreviewPlaceholder.Text = "Loading preview…"; PreviewPlaceholder.Visibility = Visibility.Visible;
@@ -609,12 +610,16 @@ public partial class MainWindow : Window
             var preview = await _backend.GetPreviewAsync(ResultPreview.Request(result, segmentId), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested(); _preview = preview;
             SetPreviewText(string.IsNullOrWhiteSpace(preview.Text) ? result.Snippet : preview.Text);
-            var moments = result.MatchedPersonIds.Count > 0 ? result.Moments : preview.Moments.Count > 0 ? preview.Moments : result.Moments;
-            var showMoments = moments.Count > 1 || result.Kind is FileKind.Video or FileKind.Audio;
-            MomentsList.ItemsSource = showMoments ? moments : [];
+            // The search's own matches, not every stored segment of the file. Browsing matched nothing.
+            var browsing = result.MatchCategory == MatchCategory.Browse && result.MatchedPersonIds.Count == 0;
+            var groups = browsing ? [] : MomentGroup.Build(result.Moments);
+            var timed = result.Kind is FileKind.Video or FileKind.Audio;
+            var showMoments = groups.Count > 1 || timed && groups.Count > 0;
+            MomentsList.ItemsSource = showMoments ? groups : [];
             MomentsHeading.Visibility = showMoments ? Visibility.Visible : Visibility.Collapsed;
-            MomentsHeading.Text = moments.Count == 1 ? "Matching moment" : $"{moments.Count:N0} matching moments";
-            _markerMoments = result.Kind is FileKind.Video or FileKind.Audio ? moments : [];
+            MomentsHeading.Text = groups.Count == 1 ? "Matching moment" : $"{groups.Count:N0} matching moments";
+            _momentGroups = timed ? groups : [];
+            _frames = preview.Frames;
             if (preview.PersonEvidence.Count > 0)
             {
                 // The faces list and the possible-match note already explain the evidence;
@@ -676,17 +681,19 @@ public partial class MainWindow : Window
             token.ThrowIfCancellationRequested();
             var audioOnly = preview.Kind == FileKind.Audio;
             var evidence = preview.PersonEvidence.FirstOrDefault();
-            var frame = evidence?.Thumbnail ?? evidence?.Portrait;
+            // A video opened paused shows nothing until it plays or seeks, so the prepared frame
+            // at that time stands in for it.
+            var frame = evidence?.Thumbnail ?? evidence?.Portrait ?? NearestFrame(preview.StartMs ?? 0)?.Thumbnail;
             var poster = audioOnly ? null : await _thumbnails.ReadAsync(frame, token);
             token.ThrowIfCancellationRequested();
             _showingPreparedFrame = poster is not null;
             PreviewImage.Source = poster;
-            PreviewImage.ToolTip = _showingPreparedFrame
-                ? evidence?.Thumbnail is not null
+            PreviewImage.ToolTip = _showingPreparedFrame && evidence is not null
+                ? evidence.Thumbnail is not null
                     ? "Sampled face frame. Play or seek to view surrounding footage."
                     : "Sampled face crop from this older library. Play or seek to view surrounding footage."
                 : null;
-            if (_showingPreparedFrame && evidence?.Thumbnail is null)
+            if (_showingPreparedFrame && evidence is not null && evidence.Thumbnail is null)
             { PersonEvidenceDetails.Text = "Showing saved face crop; the surrounding frame is unavailable in this older library."; PersonEvidenceDetails.Visibility = Visibility.Visible; }
             VideoPlayer.Width = VideoPlayer.Height = audioOnly ? 1 : double.NaN;
             VideoPlayer.HorizontalAlignment = audioOnly ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
@@ -695,10 +702,11 @@ public partial class MainWindow : Window
             PreviewPlaceholder.Text = audioOnly ? "♪\nAudio preview" : "Loading preview…";
             PreviewPlaceholder.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
             VideoPlayer.UpdateLayout();
-            _player ??= new PreviewPlayerClient(_root, VideoPlayer.WindowHandle);
+            if (_player is null) { _player = new PreviewPlayerClient(_root, VideoPlayer.WindowHandle); _muted = false; MuteGlyph.Text = ""; AutomationProperties.SetName(MuteButton, "Mute"); MuteButton.ToolTip = "Mute"; }
             PlayPauseButton.Content = ""; AutomationProperties.SetName(PlayPauseButton, "Play playback");
             PreviewTime.Text = FormatTime(preview.StartMs ?? 0);
-            await _player.OpenAsync(preview.OriginalPath, preview.StartMs ?? 0, token); StartPlaybackPolling();
+            var opened = await _player.OpenAsync(preview.OriginalPath, preview.StartMs ?? 0, token);
+            ShowTimeline(opened); StartPlaybackPolling();
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -709,14 +717,23 @@ public partial class MainWindow : Window
         }
         finally { _playbackGate.Release(); }
     }
-    private void StopPlayback() { _showingPreparedFrame = false; StopPlaybackPolling(); _ = StopPlaybackAsync(); VideoPlayer.Visibility = Visibility.Collapsed; VideoControls.Visibility = Visibility.Collapsed; }
+    private void StopPlayback() { _showingPreparedFrame = false; _frameVersion++; StopPlaybackPolling(); _ = StopPlaybackAsync(); VideoPlayer.Visibility = Visibility.Collapsed; VideoControls.Visibility = Visibility.Collapsed; TimelinePopup.IsOpen = false; PlaybackTimeline.Reset(); }
     private void ShowDecodedVideo()
     {
+        _frameVersion++;
         if (!_showingPreparedFrame || _preview?.Kind != FileKind.Video) return;
         _showingPreparedFrame = false; PreviewImage.Source = null; PreviewImage.ToolTip = null; VideoPlayer.Visibility = Visibility.Visible;
     }
-    private async void PlayPauseClick(object sender, RoutedEventArgs e) { if (_player is null) return; try { await _player.PauseAsync(); ShowDecodedVideo(); } catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); } }
-    private async void MomentClick(object sender, RoutedEventArgs e) { if (_selectedResult is not null && (sender as FrameworkElement)?.Tag is SearchMoment moment) await SelectResultAsync(_selectedResult, moment.SegmentId); }
+    private async void PlayPauseClick(object sender, RoutedEventArgs e) =>await TogglePlaybackAsync();
+    private async Task TogglePlaybackAsync() { if (_player is null) return; try { ShowTimeline(await _player.PauseAsync()); ShowDecodedVideo(); } catch (Exception ex) { Notice($"Playback interrupted: {ex.Message}"); } }
+    private async void MomentClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedResult is null || (sender as FrameworkElement)?.Tag is not MomentGroup moment) return;
+        // A moment in the open recording plays from there. Face evidence and pages reopen the
+        // preview, so its faces, checks and text describe that exact sample.
+        if (moment.HasPerson || moment.StartMs is not long at || _player is null || PlaybackTimeline.DurationMs <= 0) { await SelectResultAsync(_selectedResult, moment.Lead.SegmentId); return; }
+        await PlayFromAsync(at);
+    }
     private void ClosePreviewClick(object sender, RoutedEventArgs e) => ClosePreview(true);
     private void PreviewScrimClick(object sender, MouseButtonEventArgs e) => ClosePreview(true);
     private async void PreviewPreviousClick(object sender, RoutedEventArgs e) => await StepPreviewAsync(-1);

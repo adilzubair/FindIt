@@ -45,7 +45,7 @@ internal static class ArchiveDatabase
         CREATE INDEX IF NOT EXISTS files_modified_path ON files(modified DESC,path);
         CREATE INDEX IF NOT EXISTS files_kind_modified ON files(kind,modified DESC,path);
         CREATE TABLE IF NOT EXISTS segments(id INTEGER PRIMARY KEY AUTOINCREMENT,file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,kind INTEGER NOT NULL,text TEXT NOT NULL DEFAULT '',start_ms INTEGER,end_ms INTEGER,page INTEGER,thumbnail TEXT,vector_path TEXT,vector_offset INTEGER,vector_length INTEGER);
-        CREATE INDEX IF NOT EXISTS segments_file ON segments(file_id);
+        CREATE INDEX IF NOT EXISTS segments_file ON segments(file_id,start_ms);
         CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(file_id UNINDEXED,segment_id UNINDEXED,name,path,text,tokenize='unicode61 remove_diacritics 2');
         CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY AUTOINCREMENT,segment_id INTEGER NOT NULL REFERENCES segments(id) ON DELETE CASCADE,embedding BLOB NOT NULL,x REAL NOT NULL,y REAL NOT NULL,width REAL NOT NULL,height REAL NOT NULL,quality REAL NOT NULL,portrait TEXT);
         CREATE INDEX IF NOT EXISTS observations_segment ON observations(segment_id);

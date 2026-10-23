@@ -30,8 +30,6 @@
     <local:CountLabelConverter x:Key="CountLabel" />
     <local:FolderCaptionConverter x:Key="FolderCaption" />
     <local:FolderIndentConverter x:Key="FolderIndent" />
-    <local:MomentTimeConverter x:Key="MomentTime" />
-    <local:MomentTimeConverter x:Key="MomentTimeVisibility" />
     <Style x:Key="RowContainer" TargetType="ListBoxItem">
       <Setter Property="Padding" Value="0" />
       <Setter Property="Margin" Value="0" />
@@ -698,19 +696,39 @@
                       <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0" Padding="16,0,16,12">
                         <StackPanel>
                           <StackPanel x:Name="VideoControls" Visibility="Collapsed">
-                            <Grid>
+                            <local:MediaTimeline x:Name="PlaybackTimeline" Margin="-7,0" FocusVisualStyle="{StaticResource FocusRing}" KeyDown="TimelineKeyDown"
+                                                 AutomationProperties.Name="Playback position" />
+                            <Popup x:Name="TimelinePopup" PlacementTarget="{Binding ElementName=PlaybackTimeline}" Placement="Top" AllowsTransparency="True" IsHitTestVisible="False" VerticalOffset="-6">
+                              <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource StrongBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="3">
+                                <StackPanel>
+                                  <Border x:Name="TimelinePopupFrame" Width="160" Height="90" CornerRadius="4" Background="{DynamicResource PreviewBrush}" ClipToBounds="True">
+                                    <Image x:Name="TimelinePopupImage" Stretch="UniformToFill" />
+                                  </Border>
+                                  <TextBlock x:Name="TimelinePopupTime" HorizontalAlignment="Center" FontSize="12" FontWeight="SemiBold" Margin="0,3,0,1" />
+                                </StackPanel>
+                              </Border>
+                            </Popup>
+                            <Grid Margin="0,2,0,0">
                               <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                               </Grid.ColumnDefinitions>
-                              <Button x:Name="PlayPauseButton" Content="&#xE768;" Click="PlayPauseClick" FontFamily="{StaticResource IconFont}" FontSize="14" Width="36" Height="36" Padding="0" AutomationProperties.Name="Play playback" ToolTip="Play or pause" />
-                              <Grid Grid.Column="1" Margin="4,0">
-                                <Slider x:Name="PlaybackSeek" Minimum="0" Maximum="1" IsEnabled="False" VerticalAlignment="Center" PreviewMouseLeftButtonDown="SeekStarted" PreviewMouseLeftButtonUp="SeekReleased"
-                                        PreviewKeyUp="SeekKeyReleased" PreviewKeyDown="SeekKeyStarted" AutomationProperties.Name="Playback position" />
-                                <Canvas x:Name="MomentMarkers" Margin="10,0" Height="16" VerticalAlignment="Center" />
-                              </Grid>
-                              <TextBlock x:Name="PreviewTime" Grid.Column="2" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="4,0,0,0" />
+                              <StackPanel Orientation="Horizontal">
+                                <Button x:Name="PlayPauseButton" Content="&#xE768;" Click="PlayPauseClick" FontFamily="{StaticResource IconFont}" FontSize="14" Width="36" Height="36" Padding="0" AutomationProperties.Name="Play playback" ToolTip="Play or pause (Space)" />
+                                <TextBlock x:Name="PreviewTime" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                              </StackPanel>
+                              <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <Button x:Name="PreviousMomentButton" Click="PreviousMomentClick" Style="{StaticResource IconButton}" AutomationProperties.Name="Previous matching moment" ToolTip="Previous matching moment">
+                                  <TextBlock Text="&#xE892;" Style="{StaticResource Glyph}" FontSize="13" />
+                                </Button>
+                                <Button x:Name="NextMomentButton" Click="NextMomentClick" Style="{StaticResource IconButton}" AutomationProperties.Name="Next matching moment" ToolTip="Next matching moment">
+                                  <TextBlock Text="&#xE893;" Style="{StaticResource Glyph}" FontSize="13" />
+                                </Button>
+                                <Button x:Name="MuteButton" Click="MuteClick" Style="{StaticResource IconButton}" AutomationProperties.Name="Mute" ToolTip="Mute">
+                                  <TextBlock x:Name="MuteGlyph" Text="&#xE767;" Style="{StaticResource Glyph}" FontSize="13" />
+                                </Button>
+                              </StackPanel>
                             </Grid>
                           </StackPanel>
                           <ItemsControl x:Name="PersonEvidenceFaces" Visibility="Collapsed" Margin="0,12,0,0" AutomationProperties.Name="Sampled face evidence">
@@ -750,26 +768,36 @@
                           <ItemsControl x:Name="MomentsList">
                             <ItemsControl.ItemTemplate>
                               <DataTemplate>
-                                <Button Click="MomentClick" Tag="{Binding}" Style="{StaticResource QuietButton}" Foreground="{DynamicResource InkBrush}" HorizontalContentAlignment="Stretch" Margin="0,0,0,2" Padding="8" ToolTip="Open this moment" AutomationProperties.Name="{Binding Label}">
+                                <Button x:Name="MomentButton" Click="MomentClick" Tag="{Binding}" Style="{StaticResource QuietButton}" Foreground="{DynamicResource InkBrush}" HorizontalContentAlignment="Stretch" Margin="0,0,0,2" Padding="8" ToolTip="Play from this moment" AutomationProperties.Name="{Binding AccessibleName}">
                                   <Grid>
                                     <Grid.ColumnDefinitions>
                                       <ColumnDefinition Width="Auto" />
                                       <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Width="64" Height="40" CornerRadius="4" Background="{DynamicResource PreviewBrush}" ClipToBounds="True" Margin="0,0,12,0" VerticalAlignment="Top">
+                                    <Border Width="96" Height="54" CornerRadius="4" Background="{DynamicResource PreviewBrush}" ClipToBounds="True" Margin="0,0,12,0" VerticalAlignment="Top">
                                       <Grid>
                                         <Image Loaded="MomentThumbnailLoaded" Stretch="UniformToFill" />
-                                        <Border Style="{StaticResource MediaBadge}" Margin="3" Padding="4,0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Visibility="{Binding Converter={StaticResource MomentTimeVisibility}}">
-                                          <TextBlock Text="{Binding Converter={StaticResource MomentTime}}" FontSize="10" Foreground="White" />
+                                        <Border Style="{StaticResource MediaBadge}" Margin="3" Padding="4,0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Visibility="{Binding HasTime, Converter={StaticResource BoolVisibility}}">
+                                          <TextBlock Text="{Binding TimeLabel}" FontSize="10" Foreground="White" />
                                         </Border>
                                       </Grid>
                                     </Border>
                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                      <TextBlock Text="{Binding Converter={StaticResource MomentTime}, ConverterParameter=title}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
-                                      <TextBlock Text="{Binding Text}" Visibility="{Binding Text, Converter={StaticResource TextPresence}}" TextWrapping="Wrap" MaxHeight="50" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
+                                      <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                        <Border Visibility="{Binding IsBest, Converter={StaticResource BoolVisibility}}" Background="{DynamicResource WarningTintBrush}" CornerRadius="3" Padding="5,0" Margin="8,0,0,0" VerticalAlignment="Center">
+                                          <TextBlock Text="Best match" FontSize="11" Foreground="{DynamicResource InkBrush}" />
+                                        </Border>
+                                      </StackPanel>
+                                      <TextBlock Text="{Binding Text}" Visibility="{Binding HasText, Converter={StaticResource BoolVisibility}}" TextWrapping="Wrap" MaxHeight="50" TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
                                     </StackPanel>
                                   </Grid>
                                 </Button>
+                                <DataTemplate.Triggers>
+                                  <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                    <Setter TargetName="MomentButton" Property="Background" Value="{DynamicResource TintBrush}" />
+                                  </DataTrigger>
+                                </DataTemplate.Triggers>
                               </DataTemplate>
                             </ItemsControl.ItemTemplate>
                           </ItemsControl>
