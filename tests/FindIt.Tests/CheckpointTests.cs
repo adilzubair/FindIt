@@ -87,6 +87,21 @@ public sealed class CheckpointTests
     }
 
     [TestMethod]
+    public async Task CheckpointIntervalGrowsWithThePublishedLibraryAndIgnoresUnchangedFiles()
+    {
+        await Originals(800);
+        ArchiveStatus seeded;
+        await using(var seed=Service(new ArchiveTests.TestProcessor()))seeded=await seed.PrepareAsync(new(){Folders=["Documents"]});
+        Assert.AreEqual(800L,seeded.FileCount);
+        for(int i=0;i<150;i++)await File.WriteAllTextAsync(Path.Combine(root,"Documents",$"item-{i:D3}.txt"),$"Updated checkpoint item {i} meadow.");
+        await using var service=Service(new ArchiveTests.TestProcessor());
+        var updated=await service.PrepareAsync(new(){Folders=["Documents"]});
+        Assert.AreEqual(800L,updated.FileCount);
+        Assert.AreEqual(seeded.GenerationId+1,updated.GenerationId,"150 changed files in an 800-file library should not publish an intermediate checkpoint.");
+        Assert.AreEqual(150,(await service.SearchAsync(new(){Query="meadow",Filters=new(){ExactOnly=true},Limit=1000})).Results.Count);
+    }
+
+    [TestMethod]
     public async Task ExplicitlySkippedAndEmptyEmbeddingSegmentsDoNotCausePerpetualReextraction()
     {
         await Originals(1);

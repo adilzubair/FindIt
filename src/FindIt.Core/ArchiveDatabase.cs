@@ -31,6 +31,7 @@ internal static class ArchiveDatabase
         foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         command.ExecuteNonQuery();
     }
+    public static bool InTransaction(SqliteConnection db) => SQLitePCL.raw.sqlite3_get_autocommit(db.Handle) == 0;
     public static object? Scalar(SqliteConnection db, string sql, params (string Name, object? Value)[] parameters)
     {
         using var command = db.CreateCommand(); command.CommandText = sql;

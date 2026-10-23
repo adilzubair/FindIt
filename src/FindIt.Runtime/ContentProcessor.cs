@@ -169,25 +169,54 @@ public sealed partial class ContentProcessor : IContentProcessor
         var timeline=await MediaTimeline.ProbeAsync(paths.Tool("ffprobe.exe"),path,"a:0",token);
         const int rate=16000,window=30*rate,hop=25*rate;using var process=ProcessRunner.Start(ffmpeg,["-nostdin","-hide_banner","-loglevel","error","-i",path,"-vn","-ac","1","-ar","16000","-f","s16le","pipe:1"],true);
         using var registration=token.Register(()=>ProcessRunner.Kill(process));var diagnostic=ProcessRunner.ReadTailAsync(process.StandardError,token);var samples=new byte[window*2];var occupied=0;long offset=0;
+        // Whisper loads its model per run, so speech is transcribed in long parts rather than per
+        // embedding window. Each decoded sample is written to the part exactly once, so the
+        // embedding windows' overlap is never transcribed twice.
+        bool transcribe=paths.Tool("whisper-cli.exe") is not null&&paths.Model("ggml-small.bin") is not null;
+        var speechPath=Path.Combine(scratch,"speech.wav");FileStream? speech=null;long speechBytes=0,speechStart=0;
         try
         {
             while(true)
             {
                 var read=await process.StandardOutput.BaseStream.ReadAsync(samples.AsMemory(occupied),token);occupied+=read;
+                for(var pending=samples.AsMemory(occupied-read,transcribe?read:0);!pending.IsEmpty;)
+                {
+                    speech??=BeginWave(speechPath,rate);
+                    var take=(int)Math.Min(pending.Length,SpeechPartBytes-speechBytes);
+                    await speech.WriteAsync(pending[..take],token);speechBytes+=take;pending=pending[take..];
+                    if(speechBytes<SpeechPartBytes)continue;
+                    foreach(var segment in await TranscribePartAsync(speech,speechPath,scratch,timeline.StartMs+speechStart*1000/(rate*2),speechBytes,rate,token))yield return segment;
+                    speech=null;speechStart+=speechBytes;speechBytes=0;
+                }
                 if(occupied<samples.Length&&read>0)continue;
                 if(occupied>rate*2 && (offset==0||occupied>(window-hop)*2))
                 {
                     var wave=Path.Combine(scratch,"audio.wav");WriteWave(wave,samples,occupied,rate);var start=timeline.StartMs+offset*1000/rate;var end=start+occupied*1000/(rate*2);
                     yield return new(){Kind=SegmentKind.Audio,StartMs=start,EndMs=end,Embedding=await media.EmbedMediaAsync(wave,false,token)};
-                    foreach(var passage in await TranscribeAsync(wave,scratch,start,end-start,token))
-                        yield return new(){Kind=SegmentKind.Transcript,StartMs=passage.StartMs,EndMs=passage.EndMs,Text=passage.Text,Embedding=await text.EmbedTextAsync(passage.Text,false,token)};
                 }
                 if(read==0)break;
                 Buffer.BlockCopy(samples,hop*2,samples,0,(window-hop)*2);occupied=(window-hop)*2;offset+=hop;
             }
             await process.WaitForExitAsync(token);if(process.ExitCode!=0)throw new InvalidDataException("Audio extraction failed: "+await diagnostic);
+            if(speech is not null)
+            {
+                foreach(var segment in await TranscribePartAsync(speech,speechPath,scratch,timeline.StartMs+speechStart*1000/(rate*2),speechBytes,rate,token))yield return segment;
+                speech=null;
+            }
         }
-        finally {ProcessRunner.Kill(process);}
+        finally {ProcessRunner.Kill(process);speech?.Dispose();}
+    }
+    // Two hours of 16 kHz mono PCM per Whisper run keeps each WAV far below its 4 GiB limit.
+    private const long SpeechPartBytes=2L*60*60*16000*2;
+    private async Task<IReadOnlyList<ExtractedSegment>> TranscribePartAsync(FileStream speech,string wave,string scratch,long startMs,long bytes,int rate,CancellationToken token)
+    {
+        try{FinishWave(speech,bytes,rate);}finally{await speech.DisposeAsync();}
+        // Parts of a second or less carry no transcribable speech, as before.
+        if(bytes<=rate*2)return [];
+        var segments=new List<ExtractedSegment>();
+        foreach(var passage in await TranscribeAsync(wave,scratch,startMs,bytes*1000/(rate*2),token))
+            segments.Add(new(){Kind=SegmentKind.Transcript,StartMs=passage.StartMs,EndMs=passage.EndMs,Text=passage.Text,Embedding=await text.EmbedTextAsync(passage.Text,false,token)});
+        return segments;
     }
     private async Task<IReadOnlyList<SpeechPassage>> TranscribeAsync(string wave,string scratch,long startMs,long durationMs,CancellationToken token)
     {
@@ -206,7 +235,17 @@ public sealed partial class ContentProcessor : IContentProcessor
     }
     private static void WriteWave(string path,byte[] samples,int count,int rate)
     {
-        using var writer=new BinaryWriter(File.Create(path));writer.Write("RIFF"u8);writer.Write(36+count);writer.Write("WAVEfmt "u8);writer.Write(16);writer.Write((short)1);writer.Write((short)1);writer.Write(rate);writer.Write(rate*2);writer.Write((short)2);writer.Write((short)16);writer.Write("data"u8);writer.Write(count);writer.Write(samples,0,count);
+        using var stream=File.Create(path);WriteWaveHeader(stream,(uint)count,rate);stream.Write(samples,0,count);
+    }
+    private static FileStream BeginWave(string path,int rate)
+    {
+        var stream=new FileStream(path,FileMode.Create,FileAccess.Write,FileShare.None,1024*1024);
+        try{WriteWaveHeader(stream,0,rate);return stream;}catch{stream.Dispose();throw;}
+    }
+    private static void FinishWave(FileStream stream,long count,int rate){stream.Position=0;WriteWaveHeader(stream,checked((uint)count),rate);}
+    private static void WriteWaveHeader(Stream stream,uint count,int rate)
+    {
+        using var writer=new BinaryWriter(stream,System.Text.Encoding.UTF8,leaveOpen:true);writer.Write("RIFF"u8);writer.Write(checked(36+count));writer.Write("WAVEfmt "u8);writer.Write(16);writer.Write((short)1);writer.Write((short)1);writer.Write(rate);writer.Write(rate*2);writer.Write((short)2);writer.Write((short)16);writer.Write("data"u8);writer.Write(count);
     }
     public async ValueTask DisposeAsync(){await media.DisposeAsync();await text.DisposeAsync();faces.Dispose();ocr?.Dispose();}
 }

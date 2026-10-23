@@ -10,6 +10,8 @@ namespace FindIt.Core;
 public sealed partial class ArchiveService : IArchiveBackend
 {
     private const int Dimension = 512;
+    private const int BatchFileLimit = 256;
+    private static readonly TimeSpan BatchInterval = TimeSpan.FromSeconds(2);
     private readonly ArchiveStorage storage;
     private readonly IEmbeddingProvider embeddings;
     private readonly IContentProcessor processor;
@@ -117,22 +119,50 @@ public sealed partial class ArchiveService : IArchiveBackend
             using (var thumbnails = new PackWriter(RootPath, state.ThumbnailPack))
             using (var vectors = new PackWriter(RootPath, state.VectorPack))
             {
-                long checkpointedCompleted=0;
+                // Files commit in batches: each commit forces several flushes, which dominate
+                // small files on USB media. A file is still all-or-nothing through its savepoint;
+                // an interruption only re-prepares the uncommitted tail of the current batch.
+                bool inBatch=false;int batchFiles=0;long batchStart=0;
+                void BeginBatch()
+                {
+                    if(inBatch)return;
+                    ArchiveDatabase.Execute(db,"BEGIN IMMEDIATE;");inBatch=true;batchFiles=0;batchStart=Stopwatch.GetTimestamp();
+                }
+                void CommitBatch()
+                {
+                    if(!inBatch)return;
+                    inBatch=false;
+                    // SQLite may already have rolled the batch back after a storage error.
+                    if(!ArchiveDatabase.InTransaction(db))return;
+                    // Flush packed payloads before committing their references.
+                    thumbnails.Flush();vectors.Flush();
+                    ArchiveDatabase.Execute(db,"COMMIT;");
+                    PreparationFaults.Hit(RootPath,"file.committed");
+                }
+                void CommitBatchIfDue(){if(inBatch&&(batchFiles>=BatchFileLimit||Stopwatch.GetElapsedTime(batchStart)>=BatchInterval))CommitBatch();}
+                long changed=0,checkpointedChanged=0;
                 long checkpointTime=Stopwatch.GetTimestamp();
+                var checkpointCost=TimeSpan.Zero;
                 async Task CheckpointIfDueAsync(bool pause=false)
                 {
-                    if(completed<=checkpointedCompleted)return;
-                    bool due=pause||previous is null||completed-checkpointedCompleted>=100||Stopwatch.GetElapsedTime(checkpointTime)>=TimeSpan.FromMinutes(5);
+                    if(changed<=checkpointedChanged)return;
+                    // A checkpoint copies, checks and hashes the whole catalog. Grow its file interval
+                    // with the published library, and keep timed checkpoints to about a tenth of the work.
+                    long fileInterval=Math.Max(100,(previous?.FileCount??0)/4);
+                    var elapsed=Stopwatch.GetElapsedTime(checkpointTime);
+                    bool due=pause||previous is null||changed-checkpointedChanged>=fileInterval||elapsed>=TimeSpan.FromMinutes(5)&&elapsed>=checkpointCost*9;
                     if(!due)return;
+                    CommitBatch();
+                    long started=Stopwatch.GetTimestamp();
                     using var pauseBudget=pause?new CancellationTokenSource(TimeSpan.FromSeconds(10)):null;
                     var published=await PublishCheckpointAsync(db,state!,previous,thumbnails,vectors,Report,pauseBudget?.Token??cancellationToken,!pause);
-                    state=published.State;previous=published.Manifest;checkpointedCompleted=completed;checkpointTime=Stopwatch.GetTimestamp();
+                    state=published.State;previous=published.Manifest;checkpointedChanged=changed;checkpointTime=Stopwatch.GetTimestamp();checkpointCost=Stopwatch.GetElapsedTime(started);
                     Report(PreparationStage.Extracting,"",pause?"Completed files are searchable while preparation is paused.":"Completed files are searchable. Preparation continues.");
                 }
                 try
                 {
                 foreach (var absolute in EnumerateOriginals(scopes, (path, message) => {
-                    failed++; AddIssue(db, path, "Discovering", message);
+                    BeginBatch(); failed++; AddIssue(db, path, "Discovering", message);
                     ArchiveDatabase.Execute(db, "UPDATE files SET seen=1 WHERE path=$path COLLATE NOCASE OR path LIKE $prefix ESCAPE '\\';", ("$path", path), ("$prefix", EscapeLike(path) + "/%"));
                 }))
                 {
@@ -155,17 +185,18 @@ public sealed partial class ArchiveService : IArchiveBackend
                         string hash = request.VerifyContents ? await ArchiveStorage.HashFileAsync(absolute, cancellationToken) : "";
                         if (matches && request.VerifyContents) matches = oldHash == hash;
                         bool needsEmbeddings = embeddings.Available && ArchiveDatabase.Scalar(db, "SELECT 1 FROM segments WHERE file_id=$id AND vector_path IS NULL AND skip_embedding=0 AND length(text)>0 LIMIT 1;", ("$id", oldId)) is not null;
+                        BeginBatch();
                         if (matches && !needsEmbeddings)
                         {
                             ArchiveDatabase.Execute(db, "UPDATE files SET seen=1 WHERE id=$id; INSERT OR IGNORE INTO completed(path) VALUES($path);", ("$id", oldId), ("$path", relative));
-                            completed++; unchanged++; Report(PreparationStage.Extracting, relative, alreadyCompleted ? "Resumed a completed item." : "Unchanged item reused.");
+                            completed++; unchanged++; batchFiles++; Report(PreparationStage.Extracting, relative, alreadyCompleted ? "Resumed a completed item." : "Unchanged item reused.");
                         }
                         else
                         {
                         var fileId = oldId ?? Guid.NewGuid().ToString("D");
                         long segmentsBeforeFile=segmentCount;
                         long thumbnailMark=thumbnails.Position,vectorMark=vectors.Position;
-                        ArchiveDatabase.Execute(db, "BEGIN IMMEDIATE;");
+                        ArchiveDatabase.Execute(db, "SAVEPOINT prepared_file;");
                         try
                         {
                             ArchiveDatabase.Execute(db, "DELETE FROM search_fts WHERE file_id=$id; DELETE FROM segments WHERE file_id=$id; INSERT INTO files(id,path,kind,bytes,modified,hash,seen,processor_fingerprint) VALUES($id,$path,$kind,$bytes,$modified,$hash,1,$processor) ON CONFLICT(id) DO UPDATE SET path=excluded.path,kind=excluded.kind,bytes=excluded.bytes,modified=excluded.modified,hash=excluded.hash,seen=1,processor_fingerprint=excluded.processor_fingerprint;",
@@ -188,19 +219,17 @@ public sealed partial class ArchiveService : IArchiveBackend
                             if (emitted == 0) { InsertSegment(db, fileId, relative, new ExtractedSegment { Kind = SegmentKind.Text }, null, null, thumbnails); segmentCount++; }
                             info.Refresh();
                             if (!info.Exists || info.Length != bytes || info.LastWriteTimeUtc.ToString("O", CultureInfo.InvariantCulture) != modified) throw new IOException("The original changed while it was being prepared; it will be retried.");
-                            // Flush packed payloads before committing their references.
-                            thumbnails.Flush(); vectors.Flush();
-                            ArchiveDatabase.Execute(db, "INSERT OR REPLACE INTO completed(path) VALUES($path);", ("$path", relative));
-                            ArchiveDatabase.Execute(db, "COMMIT;"); completed++;
+                            ArchiveDatabase.Execute(db, "INSERT OR REPLACE INTO completed(path) VALUES($path); RELEASE prepared_file;", ("$path", relative));
+                            completed++; changed++; batchFiles++;
                         }
                         catch
                         {
-                            try { ArchiveDatabase.Execute(db,"ROLLBACK;"); }
+                            try { if (ArchiveDatabase.InTransaction(db)) ArchiveDatabase.Execute(db,"ROLLBACK TO prepared_file; RELEASE prepared_file;"); }
                             finally
                             {
                                 segmentCount=segmentsBeforeFile;
-                                // Only this writable tail belongs to the interrupted transaction.
-                                // Sealed packs from published snapshots are never opened here.
+                                // Only this file's writable tail belongs to the rolled-back savepoint.
+                                // Earlier files in the batch end before it; sealed packs are never opened here.
                                 try { thumbnails.Truncate(thumbnailMark); }
                                 catch(Exception cleanupError) when(cleanupError is IOException or UnauthorizedAccessException or InvalidOperationException) { }
                                 try { vectors.Truncate(vectorMark); }
@@ -208,14 +237,14 @@ public sealed partial class ArchiveService : IArchiveBackend
                             }
                             throw;
                         }
-                        // This boundary is outside the transaction rollback scope:
-                        // committed references must never have their packs truncated.
-                        PreparationFaults.Hit(RootPath, "file.committed");
                         }
                     }
                     catch (Exception error) when (error is not OperationCanceledException && error is not OutOfMemoryException && error is not ArchiveSpaceException)
                     {
-                        failed++; AddIssue(db, relative, "Extracting", error.Message);
+                        // A storage error can make SQLite roll back the whole batch, including files
+                        // marked seen. Continuing would let final reconciliation delete them.
+                        if (inBatch && !ArchiveDatabase.InTransaction(db)) { inBatch = false; throw new IOException("A storage error interrupted preparation. Earlier saved files are kept; choose Resume to continue.", error); }
+                        BeginBatch(); failed++; AddIssue(db, relative, "Extracting", error.Message);
                         // Preserve previously prepared content for a failed update, and report it explicitly.
                         ArchiveDatabase.Execute(db, "UPDATE files SET seen=1 WHERE path=$path COLLATE NOCASE;", ("$path", relative));
                         if (ArchiveDatabase.Scalar(db, "SELECT 1 FROM files WHERE path=$path COLLATE NOCASE;", ("$path", relative)) is null)
@@ -236,17 +265,25 @@ public sealed partial class ArchiveService : IArchiveBackend
                         }
                         Report(PreparationStage.Extracting, relative, "This item needs attention; other items continue.");
                     }
+                    CommitBatchIfDue();
                     await CheckpointIfDueAsync();
                 }
                 cancellationToken.ThrowIfCancellationRequested();
+                CommitBatch();
                 thumbnails.Flush(); vectors.Flush();
                 }
                 catch(OperationCanceledException) when(cancellationToken.IsCancellationRequested)
                 {
-                    try{await CheckpointIfDueAsync(pause:true);}
+                    try{CommitBatch();await CheckpointIfDueAsync(pause:true);}
                     catch(Exception checkpointError) when(checkpointError is IOException or UnauthorizedAccessException or SqliteException or OperationCanceledException)
                     {Report(PreparationStage.Paused,"","Completed files remain durable in staging; the last published search snapshot is preserved.");}
                     throw;
+                }
+                finally
+                {
+                    // Keep the batch's finished files when another failure ends preparation.
+                    try{CommitBatch();}
+                    catch(Exception commitError) when(commitError is IOException or UnauthorizedAccessException or SqliteException){}
                 }
             }
             cancellationToken.ThrowIfCancellationRequested();
