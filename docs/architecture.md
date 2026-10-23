@@ -1,8 +1,26 @@
 # Architecture
 
+## Source layout
+
+| Path | Role |
+|---|---|
+| `src/FindIt.Launcher` | Native C launcher (`FindIt.exe`): startup window, host runtime cache, single-instance handling |
+| `src/FindIt.App` | WPF desktop application; never runs inference itself |
+| `src/FindIt.Client` | Worker process clients, portable updates, drive ejection |
+| `src/FindIt.Worker` | Reader, preparer and LibVLC preview worker process |
+| `src/FindIt.Core` | Archive storage, generations, search, people and recovery |
+| `src/FindIt.Runtime` | Media/document extraction, faces, speech, native embedding and vector index bindings |
+| `src/FindIt.Shared` | Wire contracts and the framed JSON-RPC transport |
+| `native/` | C ABI over llama.cpp/mtmd (EmbeddingGemma) and USearch |
+| `tests/` | MSTest suite and the launcher test fixture |
+| `tools/` | Scale benchmark, physical-drive checker and recovery fault runner |
+| `scripts/` | Dependency fetch, native/managed build, portable publishing, update signing and package tests |
+
 ## Processes and dependency loading
 
-`FindIt.exe` is a small native launcher. It selects `FindIt/app/current.txt`, copies the versioned public runtime into a content-addressed host cache, validates `package.sha256`, and starts the cached WPF application with the original drive root. The UI does not run embedding or face inference.
+`FindIt.exe` is a small native launcher. It shows a startup window before reading the drive, selects `FindIt/app/current.txt`, copies the versioned public runtime into a content-addressed host cache, validates `package.sha256`, and starts the cached WPF application with the original drive root. The UI does not run embedding or face inference.
+
+Copying and verification run on a background thread with byte/file progress and can be cancelled; an incomplete cache is repaired on the next launch, and a `.complete` marker inside a source package is never trusted. A per-library startup mutex serializes rapid clicks and a per-runtime mutex protects a cold cache shared by different libraries. Once the application window appears the launcher exits, so it does not keep the USB drive open. Later clicks find the running window through a small record in `%LOCALAPPDATA%\FindIt\instances` holding only the PID, process creation time and executable file identity — no paths, filenames or content.
 
 `FindIt.Worker.exe` has reader, preparer, and preview roles. JSON-RPC messages are UTF-8 with a four-byte little-endian length prefix and a bounded frame size. Responses carry request IDs; preparation progress has the originating request ID. Cancellation is sent only after the request has entered the stream. EOF cancels work and closes models/indexes. Native diagnostics use stderr so they cannot corrupt the protocol.
 
@@ -16,7 +34,7 @@ The preparer passes images, video frames, PDF pages and audio windows to the nat
 FindIt.exe
 FindIt/
   app/current.txt
-  app/0.1.0-preview.4/       self-contained application and native tools
+  app/<version>/            self-contained application and native tools
   models/                   hash-verified model artifacts
   archive/
     current.json            checksummed pointer to a complete generation
@@ -37,7 +55,7 @@ Preparation never mutates a published catalog or appends to published packs. Pub
 
 On Windows, SQLite connections use its built-in `win32-longpath` VFS, including attached databases, so catalog paths and journal suffixes can exceed MAX_PATH while retaining file locking. Atomic publication retries temporary Windows sharing/access failures with bounded cancellable delays and removes only its own failed temporary file. Writer-locked maintenance collects abandoned checkpoint directories without changing retained generations.
 
-Canonical records contain segment ID, pack ordinal and byte offset. Vectors are FP16, normalized after truncation to 512 dimensions. Derived USearch HNSW indexes use cosine distance, FP16 nodes, connectivity 16 and search expansion 128. Compatible updates retain one base plus one current delta; changes reaching 10% of the base or 100,000 records trigger compaction. A live-ID filter removes tombstones from the retained base. Collection protects current/previous generation references, referenced older base indexes, active work, and user portraits. Originals and model files are never collection candidates.
+Canonical records contain segment ID, pack ordinal and byte offset. Vectors are FP16, normalized after truncation to 512 dimensions. Derived USearch HNSW indexes use cosine distance, FP16 nodes, connectivity 16 and insertion expansion 128; the reader searches with expansion 8,192, chosen by the tuning described in [scale benchmark](scale-benchmark.md#search-expansion-tuning). Compatible updates retain one base plus one current delta; changes reaching 10% of the base or 100,000 records trigger compaction. A live-ID filter removes tombstones from the retained base. Collection protects current/previous generation references, referenced older base indexes, active work, and user portraits. Originals and model files are never collection candidates.
 
 The C ABI uses opaque handles and error/status returns. Exceptions are caught within the native boundary. Native buffers have explicit ownership. Cancellation is observed during inference and in bounded managed loops.
 
@@ -47,6 +65,8 @@ Filename, path, and text use SQLite FTS5 plus literal path matching. Semantic qu
 
 Type/folder/date/people constraints are applied during candidate retrieval. Small filtered sets use canonical exact cosine search; larger sets use USearch's filtered search. Base and delta results merge by distance, then lexical and semantic rankings fuse using reciprocal rank fusion. Files group their strongest matching segments, each carrying its rank within the file; the preview opens at the strongest. Only sampled video frames store a picture, so a scene window, speech or sound match takes the frame sampled nearest its start (new catalogs index segments by file and time for this lookup). Semantic scores are not shown as probability percentages.
 
+Ranked search retrieves and groups once, with a candidate budget of `clamp(max(512, limit × 4), 512, 16384)`, then freezes the ranking in a worker-side session: file IDs, up to 12 matching segments per file and their provenance. Only the requested page is hydrated with text, snippets, thumbnails and face evidence, so continuation pages never re-encode the query or traverse the graph again. A session is bound to the library generation, encoder fingerprint, normalized query, filters, resolved people and people-overlay revision. The worker keeps at most two sessions within about 8 MiB, evicts by LRU and expires them after ten idle minutes; nothing is written to the archive. An invalid, expired or changed cursor — including after a worker restart — returns `RestartRequired`, and the interface re-runs the search while keeping the query and filters. **Search more** starts a fresh, larger window. Empty-query browsing uses ordinary catalog paging.
+
 Face vectors remain separate from scene vectors. Names and explicit corrections live in the overlay and do not require scene re-embedding. Unknown faces are clustered conservatively, uncertain memberships remain reviewable, and rejected memberships remain excluded. People queries use each observation's sampled timestamp, including when reading older catalogs with broad face intervals. Multiple people must occur in the same sampled image. Search results carry the context frame, portrait, and observation ID; preview validates current membership before opening that exact timestamp. Candidate results never verify whether a visible person is driving, riding, or performing another role.
 
 Video extraction compares small decoded active-picture thumbnails to detect scene cuts. New samples represent instants; temporal embeddings use eight-second windows with four-second overlap within a detected shot and shorter tails when at least two regular frames are available. Frames from different detected shots never enter the same joint encoding. Cut detection and finite sampling cannot guarantee all edits or appearances are found. Extraction policy is fingerprinted independently of the encoder; only an explicit preparation applies a changed policy to existing files.
@@ -55,4 +75,4 @@ Video extraction compares small decoded active-picture thumbnails to detect scen
 
 WPF uses semantic light/dark resources, the system Segoe UI Variable typeface (Segoe UI on Windows 10) and Segoe Fluent Icons or MDL2 Assets glyphs. The contact sheet virtualizes fixed-height rows; metadata is paged independently of visual virtualization. Pages of 256 results are appended as the user nears the end, up to 16 pages at once; Previous and Next move beyond that. When preparation publishes a new generation or a search session expires, the same search runs again and reloads as many results as were shown. Recent searches are stored in `people.sqlite` on the drive, never on the PC. Selection follows stable file IDs. The video preview lists the search's own matches, joining matches less than 1.5 seconds apart into one moment, and marks them above a seek bar that seeks on click or drag and shows the nearest prepared frame under the pointer. A paused player draws nothing after opening or seeking, so the nearest prepared frame stands in until playback runs. Decoded thumbnails have a 64 MiB cache, and only the selected media plays. HWND video stays rectangular with controls outside its native surface. Drive removal clears search readiness, cancels work, and leaves a reconnectable UI.
 
-The implementation is intentionally explicit about remaining validation. The design's RAM/latency/relevance/identity figures are acceptance targets, not properties inferred from architecture. See release validation for the outstanding evidence.
+The implementation is intentionally explicit about remaining validation. The design's RAM/latency/relevance/identity figures are acceptance targets, not properties inferred from architecture. See [validation status](validation.md) for the outstanding evidence.

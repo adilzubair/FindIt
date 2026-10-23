@@ -11,7 +11,7 @@ namespace FindIt.Core;
 
 public sealed partial class ArchiveService
 {
-    // Frozen from the 100k tuning split; see docs/search-next-validation.md.
+    // Frozen from the 100k tuning split; see docs/scale-benchmark.md.
     // Returned candidates remain bounded independently of graph exploration.
     internal const int SemanticSearchExpansion = 8192;
     private readonly SemaphoreSlim searchGate = new(1, 1);

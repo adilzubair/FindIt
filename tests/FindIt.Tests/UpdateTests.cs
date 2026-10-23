@@ -150,7 +150,10 @@ public sealed class UpdateTests
         string outputZip = Path.Combine(root, "publisher-update.zip");
         var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File", Path.Combine(directory.FullName, "scripts", "New-OfflineUpdate.ps1"), "-Version", "1.1.0", "-AppDirectory", source, "-PrivateKeyPath", privateKey, "-OutputZip", outputZip, "-DownloadUrl", "https://publisher.invalid/findit-1.1.0.zip" }) start.ArgumentList.Add(argument);
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not launch the publisher script.");
+        Process? started;
+        try { started = Process.Start(start); }
+        catch (System.ComponentModel.Win32Exception) { Assert.Inconclusive("PowerShell 7 (pwsh) is required to run the publisher script."); return; }
+        using var process = started ?? throw new InvalidOperationException("Could not launch the publisher script.");
         var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
         try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45)); }
         catch { if (!process.HasExited) process.Kill(entireProcessTree: true); throw; }

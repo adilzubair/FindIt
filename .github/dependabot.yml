@@ -1,0 +1,7 @@
+# Native, model and NuGet dependencies are pinned deliberately and updated by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

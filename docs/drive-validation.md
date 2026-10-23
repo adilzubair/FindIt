@@ -16,7 +16,7 @@ are specific to this test corpus.
 $env:MSBuildEnableWorkloadResolver = 'false'
 dotnet build tools/FindIt.DriveCheck -c Release --artifacts-path artifacts/drive-check-build
 $check = 'artifacts/drive-check-build/bin/FindIt.DriveCheck/release/FindIt.DriveCheck.exe'
-$worker = 'D:\FindIt\app\0.1.0-preview.3\FindIt.Worker.exe'
+$worker = 'D:\FindIt\app\<version>\FindIt.Worker.exe'
 & $check --root D:\ --worker $worker --report "$PWD/artifacts/drive-check.json"
 & $check --root D:\ --worker $worker --report "$PWD/artifacts/drive-extras.json" --extras
 & $check --root D:\ --worker $worker --report "$PWD/artifacts/drive-reader.json" --reader-only

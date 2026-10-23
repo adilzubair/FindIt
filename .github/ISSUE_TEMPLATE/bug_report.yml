@@ -1,0 +1,55 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please **do not attach personal photos, videos, documents or archive files**. Describe a problem file by type, size and codec instead.
+        Report security problems privately as described in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: FindIt version
+      description: The text in FindIt/app/current.txt on the drive.
+      placeholder: 0.1.0-preview.9
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2, x64
+    validations:
+      required: true
+  - type: dropdown
+    id: drive
+    attributes:
+      label: Drive
+      options: [USB stick, External SSD, External HDD, Internal drive, Other]
+  - type: dropdown
+    id: filesystem
+    attributes:
+      label: File system
+      options: [NTFS, exFAT, FAT32, Other / unknown]
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Prepare a drive with ...
+        2. Search for ...
+        3. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Messages or issues shown
+      description: Error text, or entries from Drive > Files needing attention. Remove any private paths or names.
+      render: text

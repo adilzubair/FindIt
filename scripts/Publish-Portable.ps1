@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.1.0-preview.4',
+    [string]$Version,
     [string]$OutputDirectory,
     [string]$BuildArtifactsPath,
     [switch]$SkipBuild,
@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
 if ($env:FindItEnableFaultInjection -eq 'true') { throw 'Fault-injection builds are for workspace validation only. Clear FindItEnableFaultInjection before publishing.' }
+if (-not $Version) { $Version = (Select-Xml -Path (Join-Path $taskRoot 'Directory.Build.props') -XPath '//Version').Node.InnerText }
 if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $Version.Contains('..')) { throw 'Invalid version.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRoot 'artifacts/portable' }
 $taskOutput = [IO.Path]::GetFullPath($OutputDirectory)

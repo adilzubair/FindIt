@@ -56,7 +56,7 @@ The source build locates the bundled `runtime/native/libusearch_c.dll` through t
 - Filters are explicit stable key subsets: all records, `key % 10 == 3`, and `key % 100 == 17`. Expected filtered results are computed from their complete eligible sets, not by filtering a short global result list. Key filters can correlate with synthetic clusters; the exact reference includes that effect.
 - Recall@50 is the fraction of exact top-50 keys present in the first 50 ANN results. If fewer than 50 records are eligible, the denominator is the exact eligible result count. The report includes every query's expected/actual/hit counts, mean recall, and worst query recall.
 
-Graph construction retains the pinned cosine/FP16, connectivity 16 and insertion expansion 128. The runner defaults to search expansion 128 to reproduce historical baselines; each search explicitly configures its requested expansion independently of returned candidates, including on mapped graphs. The production reader uses 8,192 after the [separate tuning/evaluation](search-next-validation.md). USearch increases effective expansion when a larger candidate request requires it. Reports record native DLL/graph SHA-256, candidate count, configured/effective expansion, query offset and query fingerprint. The caller must separate tuning and untouched evaluation; the runner does not select parameters automatically.
+Graph construction retains the pinned cosine/FP16, connectivity 16 and insertion expansion 128. The runner defaults to search expansion 128 to reproduce historical baselines; each search explicitly configures its requested expansion independently of returned candidates, including on mapped graphs. The production reader uses 8,192 after the [separate tuning/evaluation](#search-expansion-tuning). USearch increases effective expansion when a larger candidate request requires it. Reports record native DLL/graph SHA-256, candidate count, configured/effective expansion, query offset and query fingerprint. The caller must separate tuning and untouched evaluation; the runner does not select parameters automatically.
 
 New benchmark graphs use bounded parallel insertion, with at most eight workers and 1,024 vectors per batch. The native index reserves the complete corpus capacity before parallel insertion. An exclusive managed gate prevents search, save, reserve, or disposal while workers are active; every native insertion receives a separate error pointer. All workers join before the completed canonical prefix advances. Inputs are checked for finite values and duplicate keys before mutation. A native batch failure poisons its in-memory handle, preventing search, save, or continuation; resumption reloads the last durable checkpoint instead of saving a partial batch.
 
@@ -96,59 +96,25 @@ A completed native index is reused only after validating its dataset identity, n
 
 Press Ctrl+C for cooperative cancellation. Reports and artifacts stay local. Neither drive contents, source media, nor generated scale data should be committed to Git.
 
-## Development measurements, 21 October 2026
+## Search expansion tuning
 
-These runs used a Core Ultra 9 275HX, 32 GB RAM, Windows 11 build 26200, local storage, and the pinned native DLL. Other development preparation/build jobs ran concurrently. Filesystem cache was uncontrolled. Timings are diagnostic measurements, not isolated performance certification or evidence for the older 8 GB laptop.
+The reader's search expansion was chosen without touching its evaluation data. The experiment reused the checksum-verified, serially built 100,000-vector graphs for both distributions (seed 42) and compared `(returned candidates, configured expansion)` pairs:
 
-At 100,000 records, the 512-candidate configuration produced these mean Recall@50 values against 64 independent exhaustive reference queries. Mapped and loaded modes agreed:
+| Candidates | Expansion | Purpose |
+|---:|---:|---|
+| 512 | 128 | Reproduce the baseline; effective expansion is 512 |
+| 1,024 | 128 | The interface's first-page budget; effective expansion is 1,024 |
+| 1,024 | 2,048 / 4,096 / 8,192 | Explore more without hydrating more results |
+| 512 | Selected | Separate returned-metadata cost from exploration cost |
 
-| Synthetic distribution | Unfiltered | 10% eligible | 1% eligible | Gate |
-|---|---:|---:|---:|---|
-| `clustered-512` | 100% | 99.97% | 100% | Pass |
-| `isotropic-512` | 30.06% | 90.16% | 100% | **Fail** |
+Query IDs 256–511 (`--query-offset 256 --query-count 256`) were used for tuning. On the hard isotropic set, unfiltered mean Recall@50 rose from 50.15% to 71.08%, 87.95% and 97.04% at expansions 128, 2,048, 4,096 and 8,192; 8,192 was the smallest value that passed every filter and access-mode scenario for both distributions. The policy was then frozen and evaluated once on untouched query IDs 512–767. Results are summarized in [validation status](validation.md#search-quality-and-scale).
 
-At 500,000 `clustered-512` records, both access modes passed: unfiltered 99.75%, 10% eligible 98.94%, and 1% eligible 99.81%. Unfiltered warm P95 was 7.21 ms mapped and 3.22 ms loaded; these exclude encoding and catalog/UI work. Index size was 586,282,600 bytes, in addition to 512,000,000 canonical vector bytes. The final benchmark-child working set while the index was open was approximately 681–704 MiB across the two modes. See `artifacts/scale-validation/clustered-500k.json` for scenario-level latency and memory.
+Repeat this protocol — separate tuning and evaluation offsets, retain every report, never retune on evaluation results — before changing `ArchiveSearch`'s expansion. Larger exploration budgets increase page traffic on HDDs and must be measured on the target hardware.
 
-Reports are `artifacts/scale-validation/clustered-100k.json` and `isotropic-100k.json`. The failed report is retained. The distributions contain synthetic vectors, not labeled media embeddings; neither outcome establishes semantic usefulness. Sparse filtered benchmark scenarios deliberately exercise native ANN even when the production reader would use its small-set exact path.
-
-The hard isotropic result keeps ANN release certification open. Do not substitute the clustered result for it. A future tuning pass can use the pinned C API's `usearch_change_expansion_search` to compare larger exploration budgets on the existing graph without re-embedding. Choose settings with separate tuning queries, then evaluate untouched held-out queries and actual media, including old-PC and HDD latency. Production settings remain unchanged pending that evaluation.
-
-Focused reference/safety tests:
+## Focused tests
 
 ```powershell
 dotnet test tests/FindIt.Tests/FindIt.Tests.csproj -c Release `
   --artifacts-path artifacts/scale-tests-build -m:1 --disable-build-servers `
   --filter FullyQualifiedName~ScaleBenchmarkTests
 ```
-
-## Recorded development run — 21 October 2026
-
-Host: Intel Core Ultra 9 275HX, 24 logical processors, 33,752,997,888 bytes physical RAM, Windows build 26200, .NET 10.0.11 x64. Runs used the local workspace drive. Other development work ran concurrently and filesystem caches were uncontrolled. These results are development evidence, **not certification of the reference 8 GB laptop, an external HDD, semantic relevance, or complete reader memory**.
-
-All rows use 512 dimensions, 64 independent queries, exact top-50 reference, and seed 42. Each recall value below is the mean across queries and was identical between mapped and loaded modes. Construction differs between the older serial graphs and the newer eight-worker graph; this is recorded rather than treated as a controlled construction comparison.
-
-| Dataset | Records | Construction | Requested candidates | Recall@50: all / 10% / 1% | Mean ≥95% in all scenarios |
-| --- | ---: | --- | ---: | --- | --- |
-| Clustered | 100,000 | Serial | 512 | 100.00% / 99.97% / 100.00% | Pass |
-| Clustered | 500,000 | Serial | 512 | 99.75% / 98.94% / 99.81% | Pass |
-| Clustered | 1,000,000 | Eight workers, resumed after hard kill | 512 | 98.38% / 96.81% / 99.03% | Pass |
-| Clustered, same million-record graph | 1,000,000 | Same saved graph | 1,024 | 99.03% / 98.53% / 99.31% | Pass |
-| Isotropic | 100,000 | Serial | 512 | 30.06% / 90.16% / 100.00% | **Fail** |
-| Isotropic, same graph | 100,000 | Same saved graph | 1,024 | 50.78% / 98.38% / 100.00% | **Fail** |
-
-The WPF interface currently requests 256 results, resulting in 1,024 semantic candidates. The worker/API minimum remains 512. The 1,024-candidate runs therefore diagnose the existing interface policy; they are not parameter tuning or an untouched certification set. The isotropic failure remains open evidence of a hard-distribution limitation. No global search-expansion increase was applied to conceal it.
-
-The million-record graph is 1,172,578,076 bytes and its canonical FP16 data is 1,024,000,000 bytes. Its checkpointed native construction took 478.85 seconds, excluding the earlier discarded serial attempt and some restart overhead. A deliberately terminated owned process had logged 320,480 inserted rows; the latest verified graph checkpoint held 300,000 with the previous 250,000 retained. Current/previous checksums and the entire canonical-file checksum matched before/after termination. Resumption loaded a private copy of the verified 300,000-row checkpoint and completed the run. This exercised real process death in addition to the small cooperative-cancellation and corrupt-current-checkpoint tests.
-
-The before/after load optimization reused the exact same million-record graph, canonical data, 64-query reference, and 1,024-candidate policy:
-
-| Loaded-index measurement | Mapped-source copy loader | Short-ASCII streaming loader |
-| --- | ---: | ---: |
-| Peak child working set | 2,483,486,720 bytes | 1,411,051,520 bytes |
-| Final child working set | 1,410,973,696 bytes | 1,411,051,520 bytes |
-| Index-open time | 1.033 seconds | 2.363 seconds |
-| Mean Recall@50: all / 10% / 1% | 99.03% / 98.53% / 99.31% | 99.03% / 98.53% / 99.31% |
-
-The measured peak reduction is about 43.2%, with a slower open in this run. Final memory and recall were unchanged. Streaming-loader warm P95 native retrieval was 8.57 / 75.58 / 421.27 ms for all / 10% / 1% respectively. Mapped timings varied substantially with cache/development activity and are retained in the raw reports; this is another reason to avoid treating this run as hardware latency certification. These memory values exclude model encoding, catalog, UI, preview, and other processes. Unicode/long-path fallback retains the two-copy loading behavior, which the reader's preload policy must budget or avoid.
-
-Raw local reports are retained under `artifacts/scale-validation/`: `clustered-100k.json`, `clustered-500k.json`, `clustered-1m-parallel.json`, `clustered-1m-ui1024.json`, `clustered-1m-ui1024-stream.json`, `isotropic-100k.json`, and `isotropic-100k-ui1024.json`. The `native-hardkill-before.json` / `native-hardkill-after.json` evidence and distinct interrupted/restart logs preserve the recovery exercise. They contain synthetic data and machine diagnostics, remain local, and are not committed with generated datasets.
