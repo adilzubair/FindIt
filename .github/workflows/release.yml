@@ -1,0 +1,101 @@
+name: Release
+
+# Push a tag such as v0.1.0-preview.9 to build and test the portable package and create a draft release.
+# Run manually to rehearse the full build without creating a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  MSBuildEnableWorkloadResolver: 'false'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Read version
+        id: version
+        run: |
+          $version = (Select-Xml -Path Directory.Build.props -XPath '//Version').Node.InnerText
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match <Version>$version</Version> in Directory.Build.props."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .tools/downloads
+            runtime/models
+            runtime/tessdata
+          key: deps-${{ runner.os }}-${{ hashFiles('scripts/Fetch-Dependencies.ps1', 'models/manifest.json') }}
+
+      - uses: actions/cache@v4
+        with:
+          path: .packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'NuGet.Config') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Build native and managed code, run tests
+        run: ./scripts/Build.ps1 -Configuration Release
+
+      - name: Publish portable package
+        run: ./scripts/Publish-Portable.ps1 -SkipBuild -Zip -Version '${{ steps.version.outputs.version }}' -OutputDirectory 'artifacts/FindIt-${{ steps.version.outputs.version }}-win-x64'
+
+      - name: Test published package
+        run: ./scripts/Test-Portable.ps1 -PackageRoot 'artifacts/FindIt-${{ steps.version.outputs.version }}-win-x64' -ReportPath artifacts/published-check.json
+
+      - name: Checksum and release notes
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $zip = Get-Item "artifacts/FindIt-$version-win-x64.zip"
+          if ($zip.Length -ge 2GB) { throw "The package is $($zip.Length) bytes; GitHub release assets must be under 2 GiB." }
+          $hash = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$($zip.FullName).sha256", "$hash  $($zip.Name)`n")
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $match = [regex]::Match($changelog, "(?ms)^## \[$([regex]::Escape($version))\][^\n]*\n(.*?)(?=^## \[|\z)")
+          $notes = if ($match.Success) { $match.Groups[1].Value.Trim() } else { "See CHANGELOG.md." }
+          $notes += "`n`n---`n`nExtract the ZIP to the root of an external drive and open ``FindIt.exe``. Packages are not code-signed yet, so Windows SmartScreen may ask for confirmation. SHA-256: ``$hash``"
+          [IO.File]::WriteAllText('artifacts/release-notes.md', $notes)
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-reports
+          path: |
+            artifacts/tests
+            artifacts/published-check.json
+            artifacts/release-notes.md
+          if-no-files-found: ignore
+
+      - name: Create draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $arguments = @($env:GITHUB_REF_NAME, "artifacts/FindIt-$version-win-x64.zip", "artifacts/FindIt-$version-win-x64.zip.sha256",
+            '--draft', '--title', "FindIt $version", '--notes-file', 'artifacts/release-notes.md', '--verify-tag')
+          if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $arguments += '--prerelease' }
+          gh release create @arguments

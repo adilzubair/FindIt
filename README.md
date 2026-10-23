@@ -1,73 +1,120 @@
-# FindIt
+<p align="center">
+  <img src="src/FindIt.App/Assets/FindIt.png" alt="FindIt" width="112" />
+</p>
 
-Prepare an external drive on a powerful Windows PC, then search it offline on another PC. The application, models, previews, catalog, and people metadata travel with the drive. Originals stay in their existing folders.
+<h1 align="center">FindIt</h1>
 
-This repository contains a working **0.1.0 preview**, including native inference and a portable package builder. It is not yet a certified public release. See [release validation](docs/RELEASE-VALIDATION.md) for measured results and remaining gates.
+<p align="center">
+  <strong>Offline search for photos, videos, audio and documents, carried on the drive itself.</strong>
+</p>
 
-## Run the portable application
+<p align="center">
+  <a href="https://github.com/adilzubair/FindIt/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/adilzubair/FindIt/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/adilzubair/FindIt/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/adilzubair/FindIt?include_prereleases&sort=semver" /></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
+  <img alt="Platform: Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4" />
+</p>
 
-1. Copy **FindIt.exe and the entire FindIt folder** from `artifacts/portable` to the root of your external drive. Keep them together. Leave your existing Photos, Videos, and Documents folders in place.
-2. Launch `FindIt.exe`. Choose **Prepare drive**, select folders and OCR languages, and explicitly start preparation.
-3. Search by filename, exact document text, or meaning. Filter by type, folder, date, and saved people. Select a result for its preview and matching moments.
-4. Name a prepared face group or enroll a reference photo from this drive. Review suggested memberships before relying on a person's identity. Person/action results are candidate matches with temporal evidence.
-5. Use **Close and eject** before moving the drive. On the next PC, launch the same executable. No installed .NET runtime, Python, browser runtime, or host codecs are required by the package.
+Prepare an external drive once on a capable Windows PC. Then plug it into any other Windows PC and search everything on it — by filename, by the exact words inside a document, or by meaning ("red bicycle in a forest", "someone speaking about invoices") — with no installation, no internet connection and no cloud account.
 
-Windows 10 22H2 and Windows 11 x64 are the intended targets. This preview was built and exercised on Windows 11; the clean Windows 10 and older 8 GB laptop certification remains outstanding. Do not equate a successful developer-machine run with those compatibility gates.
+The application, AI models, previews, search index and people data all live on the drive next to your files. Your originals stay exactly where they are and are only ever read.
 
-The native launcher copies **public application/runtime files only** to `%LOCALAPPDATA%\FindIt\runtime`. This disposable cache lets the UI survive drive removal and release executable handles before ejection. Models, originals, search indexes, extracted content, people, and preferences remain on the drive. The runtime cache can be removed while FindIt is closed. FindIt also records which model files it has already checksum-verified in `%LOCALAPPDATA%\FindIt\verification`, so later launches skip re-reading them from the drive; deleting that folder only means the next launch verifies them again.
+> [!IMPORTANT]
+> FindIt is a **development preview**. It works end to end and is covered by over 200 automated tests and physical-drive checks, but it has not yet passed its public-release gates (clean-machine testing, one-million-file scale on an 8 GB laptop, signed packages). See [validation status](docs/validation.md).
 
-A native startup window appears before reading the drive's application files. First launch on a PC or after an update shows copy and verification progress and can be cancelled; later launches reuse the verified cache. Repeated clicks bring the startup or existing library window forward instead of opening another copy. Tiny disposable process records in `%LOCALAPPDATA%\FindIt\instances` support this behavior without keeping the USB launcher running. They contain no library content or filenames and can also be removed while FindIt is closed. Open the root `FindIt.exe` to use this behavior; launching the internal application directly bypasses the launcher.
+## Features
 
-## Build
+- **Search by meaning** across images, video frames, video scenes, speech, sound and document text, using a local [EmbeddingGemma](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF) model, combined with exact keyword search (SQLite FTS5).
+- **Video moments**: results open at the matching moment, with scene-aware sampling, a timeline of matches and transcripts from Whisper.
+- **Documents**: PDF (with OCR for scanned pages), Office Open XML, RTF, HTML and plain text, with the matching words highlighted.
+- **People**: faces are grouped locally; name a group or enroll a reference photo, review suggested matches, then search for one or several people together.
+- **Filters** by type, folder, date and person.
+- **Truly portable**: a self-contained package with its own .NET runtime, codecs and models. Nothing to install on the host PC.
+- **Safe with your files**: originals are never modified, moved or uploaded. Preparation is resumable, crash-safe and keeps the previous complete index if anything fails.
+- **Private by design**: no telemetry, no accounts and no background network access. Update checks only happen when you ask and when a publisher has been configured.
 
-Build prerequisites: Windows x64, PowerShell 7.2+, .NET SDK 10.0.400, and network access for the initial dependency download. A compiler, CMake, Ninja, pinned native sources, models, codecs, and licenses are fetched into the workspace; Visual Studio and administrator access are unnecessary.
+## Getting started
 
-```powershell
-./scripts/Build.ps1
-./scripts/Publish-Portable.ps1 -SkipBuild -Zip
-./scripts/Test-Portable.ps1 -PackageRoot artifacts/portable -ReportPath artifacts/published-check.json
+### Requirements
+
+- Windows 10 22H2 or Windows 11, x64
+- An external drive (USB stick, SSD or HDD; NTFS, exFAT or FAT32) with room for the package (~2 GB) plus the index
+- A reasonably fast PC for the first preparation; searching works on modest hardware
+
+### Install
+
+1. Download `FindIt-<version>-win-x64.zip` from the [latest release](https://github.com/adilzubair/FindIt/releases) and verify it against the published `.sha256` file.
+2. Extract it to the **root** of your external drive, so the drive contains `FindIt.exe` and a `FindIt` folder side by side. Leave your existing folders where they are.
+
+### Use
+
+1. Open `FindIt.exe` on the drive. A small startup window appears while the app is copied into a local cache on first launch.
+2. Go to **Drive**, choose the folders to make searchable and the OCR languages, then start preparation. Large libraries can take hours; you can pause and resume, and partial results become searchable along the way.
+3. Search from the home screen. Select a result to preview it; videos and recordings open at the matching moment.
+4. In **People**, name face groups or add a reference photo, and confirm or reject suggested matches.
+5. Use **Eject** before unplugging the drive. On the next PC, just open the same `FindIt.exe`.
+
+> [!NOTE]
+> Person and action results are *possible matches* based on sampled frames. Review them before relying on someone's identity.
+
+### What FindIt stores on the host PC
+
+Only disposable caches under `%LOCALAPPDATA%\FindIt`, which can be deleted whenever FindIt is closed:
+
+| Folder | Contents |
+|---|---|
+| `runtime` | A copy of the application binaries, so the app survives drive removal and the drive can be ejected cleanly |
+| `verification` | Which model files were already checksum-verified, to skip re-reading them on later launches |
+| `instances` | Tiny process records so repeated clicks bring the open window forward (no filenames or content) |
+
+Models, indexes, extracted text, people data, recent searches and preferences stay on the drive.
+
+### Updating a prepared drive
+
+Close FindIt, then copy the new `FindIt.exe` and `FindIt` folder over the old ones, keeping `FindIt/archive` and your original folders. The existing library opens immediately; run preparation again when you want new extraction improvements applied to it.
+
+## How it works
+
+```text
+FindIt.exe (native launcher)
+   └─ FindIt.App (WPF UI)
+        ├─ Worker: reader     search, previews, people       ─┐
+        ├─ Worker: preparer   extraction, embeddings, faces   ├─ framed JSON-RPC over pipes
+        └─ Worker: preview    isolated LibVLC playback       ─┘
 ```
 
-The first command verifies artifact checksums, builds the baseline CPU libraries, launcher and managed solution, then runs integration tests. The second publishes self-contained Windows applications, includes the models/codecs, creates per-file runtime checksums, and writes `artifacts/portable` and `artifacts/portable.zip`. The third tests real model inference through the published worker against temporary originals; it refuses existing archives and cleans its test catalog afterward. Allow several GB of workspace/free package space. Subsequent builds can use `-SkipDependencies` after a complete first build.
+Heavy and native work runs in separate worker processes, so a crashing decoder cannot take down the UI. Preparation writes immutable, checksummed index generations and only switches to a new one when it is complete. Read [architecture](docs/architecture.md) for the full design.
 
-Use `-BuildArtifactsPath artifacts/my-build` on both build and publish scripts to isolate intermediate files and binaries from a running source application. Builds run the worker integration tests against that same isolated output. Normal builds and portable publication explicitly exclude the validation-only fault hooks.
+## Building from source
 
-Run `./scripts/Test-Launcher.ps1` separately in an interactive Windows session to verify the native startup UI, rapid repeated clicks, cancellation, crash recovery, cold/warm cache behavior, separate libraries and corrupt-file rejection. It builds a small delayed-window fixture and uses a fresh workspace cache; its startup timing does not certify physical USB or clean-machine performance.
-
-To run source builds against a selected archive root:
+Requires Windows x64, [.NET SDK 10.0.400](https://dotnet.microsoft.com/download) and PowerShell 7.2+. The build downloads its own compiler, CMake, pinned native sources and models (all SHA-256 verified); Visual Studio is not needed.
 
 ```powershell
-dotnet run --project src/FindIt.App -- --root X:\
+./scripts/Build.ps1                              # dependencies, native and managed build, tests
+./scripts/Publish-Portable.ps1 -SkipBuild -Zip   # artifacts/portable and artifacts/portable.zip
 ```
 
-Never point preparation at a folder you do not intend to catalog. Files are opened for reading; preparation writes only beneath `FindIt/archive`. Symlinks, junctions, recursive application folders, and placeholders requiring cloud downloads are excluded.
+See [development](docs/development.md) for the managed-only workflow, test harnesses, validation tools and the release process.
 
-## What is implemented
+## Documentation
 
-- A light/dark WPF gallery, paged metadata, recycled contact-sheet rows, bounded thumbnail cache, keyboard navigation, people review, preparation controls, and disconnected states.
-- Isolated reader, preparer, and LibVLC playback workers over cancellable framed JSON-RPC.
-- Real EmbeddingGemma 2 Q8 text/image/video/audio encoding, 512-dimensional normalized FP16 canonical vectors, USearch mapped indexes, filtered exact retrieval, SQLite FTS5, and reciprocal rank fusion.
-- Stable ranked search windows with page-only metadata loading, explicit session restart and **Search more**. ANN exploration is tuned separately from returned results; see [the 100k held-out measurements and remaining scope](docs/search-next-validation.md).
-- Streaming media extraction, frame/face sampling, temporal windows bounded by detected scene cuts, overlapping audio windows, Whisper small with offline voice activity detection, PDF rendering/OCR, and text/Open XML extraction.
-- YuNet/SFace face observations, reference enrollment, named groups, aliases, membership confirmations/rejections, and timestamp-constrained people search. Person results show the sampled context frame and face crop and open playback at that observation. Multiple selected people must share a sampled frame.
-- Portable relative paths and library IDs, resumable file transactions, immutable generations, checksummed publication, retained previous results, bounded incremental indexes, and collection of unused application artifacts.
-- Explicit signed update checks and offline update installation. There is no telemetry or background network check. Publisher configuration and signing credentials are intentionally absent from the development preview.
+- [Architecture](docs/architecture.md): processes, storage, retrieval and people
+- [Validation status](docs/validation.md): what has been measured, release gates and known limits
+- [Development](docs/development.md): building, testing, releasing
+- [People evidence and media timing](docs/people-evidence.md)
+- [Scale benchmark](docs/scale-benchmark.md), [recovery validation](docs/recovery-validation.md), [drive validation](docs/drive-validation.md)
+- [Changelog](CHANGELOG.md)
 
-Read [architecture](docs/ARCHITECTURE.md), [release validation](docs/RELEASE-VALIDATION.md), and [third-party notices](THIRD-PARTY-NOTICES.md) before distributing a build. Model and dependency revisions/checksums are recorded in `models/manifest.json` and `scripts/Fetch-Dependencies.ps1`.
+## Contributing
 
-Existing prepared libraries remain readable. Explicitly preparing with this version refreshes extraction when its policy changes, including the new video scene boundaries. Sampling and cut detection can miss brief appearances or edits; person/action results remain possible matches for inspection.
+Bug reports, ideas and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first, and report security issues privately as described in [SECURITY.md](SECURITY.md).
 
-If an original's size or modification time changed after preparation, FindIt blocks its stale preview and asks you to prepare again. Use **Verify contents** to detect replacements whose size and timestamp were deliberately preserved.
+## License
 
-For an existing portable drive, close FindIt and merge the new `FindIt.exe` and `FindIt` application folder into the drive root. Preserve `FindIt/archive` and all original folders. The new package contains no prepared archive. Open and search first; start preparation explicitly when ready to refresh the media extraction policy.
+FindIt is released under the [MIT License](LICENSE).
 
-## Measurements and updates
+The portable package bundles third-party software and models under their own licenses, including LGPL-licensed FFmpeg and LibVLC, which ship as separate, replaceable libraries. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and the `licenses` folder in each package.
 
-```powershell
-dotnet run --project tools/FindIt.Bench -- --root X:\ --queries queries.txt --repeat 5 --output artifacts/reader.json
-dotnet run --project tools/FindIt.Bench -- --root artifacts/scale --ann-records 100000 --distribution clustered-512 --query-count 64 --output artifacts/ann.json
-```
+## Acknowledgements
 
-These commands produce measurements, not a certification. The scale benchmark uses independent queries and exhaustive FP16 cosine top-50 references, with unfiltered, 10%, and 1% eligibility sets in mapped and loaded processes. Run both documented synthetic distributions and retain failures. See [scale methodology](docs/scale-benchmark.md) and [recovery validation](docs/recovery-validation.md). The reader report excludes UI and playback memory. Uncached query latency, real relevance, identity precision, physical drive behavior, and accessibility need their own acceptance runs.
-
-For publisher-managed updates, place a trusted ECDSA **public** key and an HTTPS manifest URL in `FindIt/update-source.json` using properties `publicKeyPem` and `manifestUrl`. Keep the private key outside the drive and source tree. `scripts/New-OfflineUpdate.ps1` creates a signed update ZIP from a published application version. The updater verifies the signature, file hashes, launcher manifest, version, and safe paths before activation; it cannot replace models or archive data. Without publisher configuration, the UI reports update checks as unavailable and makes no network request.
+FindIt builds on [llama.cpp](https://github.com/ggml-org/llama.cpp), [EmbeddingGemma](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF), [USearch](https://github.com/unum-cloud/USearch), [whisper.cpp](https://github.com/ggml-org/whisper.cpp), [OpenCV](https://github.com/opencv/opencv) and the YuNet/SFace models, [Tesseract](https://github.com/tesseract-ocr/tesseract), [PDFium](https://pdfium.googlesource.com/pdfium/), [FFmpeg](https://ffmpeg.org/), [LibVLC](https://www.videolan.org/vlc/libvlc.html) and [SQLite](https://sqlite.org/). [DigUp](https://github.com/ARahim3/DigUp) informed the early architecture and model compatibility work.

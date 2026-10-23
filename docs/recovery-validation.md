@@ -21,4 +21,16 @@ The matrix covers termination after a segment write and file commit, before/afte
 
 Further cases inject disk-full exceptions at real boundaries, briefly lock the pointer to exercise bounded retries, deny replacement through Windows access controls, corrupt or remove required artifacts, truncate the pointer, change bytes without changing size/mtime, delete sources, and relocate/disconnect/reconnect a generated root. The runner kills only its own blocked child processes. JSON reports include each result and failure.
 
+Scenarios include:
+
+- Killing only the runner's own blocked preparer inside a file transaction, after a file commit, before and after moving a generation, and before switching its pointer.
+- Killing intermediate checkpoint publications, removing runner-created originals before resume, and accepting a complete new generation after its pointer has switched.
+- Injecting disk-full exceptions during space checks and publication.
+- A real Windows sharing conflict that denies pointer replacement, plus a short conflict that must succeed after bounded retries.
+- Recovering from a damaged catalog, missing vector records, a truncated manifest and a torn pointer without reader repairs.
+- Publishing after a corrupted generation has been skipped, then damaging the new catalog and proving collection kept the previous verified generation.
+- Appending a newly discovered text embedding after an interrupted checkpoint while the complete checkpoint's shared vector packs stay unchanged. This scenario needs the verified local embedding model.
+
+`recovery-report.json` records every assertion and the executable fails on any error. For a targeted regression, `--filter <scenario name substring>` selects matching scenarios and records the filter in the report; a filter that selects nothing fails. Fault activation needs both the explicit build-time opt-in and the runner's process environment with a generated sandbox nonce, and the runner kills a worker only after a marker identifies its exact owned PID, root and fault boundary.
+
 This is local filesystem fault validation. Injected disk-full errors do not fill a disk or emulate device firmware. Renaming a generated root does not establish physical USB removal behavior. Power loss, full-volume write protection, real NTFS/exFAT removable media and the older offline PC still require separate acceptance runs. Preserve the first failing report when fixing and repeating a check.
