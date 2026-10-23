@@ -86,6 +86,8 @@ internal static class NativeMethods
     [DllImport("findit_native", CallingConvention=CallingConvention.Cdecl)] internal static extern int fi_gpu_available([MarshalAs(UnmanagedType.LPUTF8Str)] string backends);
     [DllImport("findit_native", CallingConvention=CallingConvention.Cdecl)] internal static extern int fi_embed_text(IntPtr handle,[MarshalAs(UnmanagedType.LPUTF8Str)] string text,int query,[Out] float[] result,int capacity,IntPtr cancel,out IntPtr error);
     [DllImport("findit_native", CallingConvention=CallingConvention.Cdecl)] internal static extern int fi_embed_media(IntPtr handle,[MarshalAs(UnmanagedType.LPUTF8Str)] string path,int image,[Out] float[] result,int capacity,IntPtr cancel,out IntPtr error);
+    [DllImport("findit_native", CallingConvention=CallingConvention.Cdecl)] internal static extern int fi_embed_media_buffer(IntPtr handle,byte[] data,nuint length,int image,[Out] float[] result,int capacity,IntPtr cancel,out IntPtr error);
+    [DllImport("findit_native", CallingConvention=CallingConvention.Cdecl)] internal static extern int fi_embed_frame_buffers(IntPtr handle,IntPtr[] frames,nuint[] lengths,int count,[Out] float[] result,int capacity,IntPtr cancel,out IntPtr error);
     [DllImport("findit_native", CallingConvention=CallingConvention.Cdecl)] internal static extern int fi_embed_frames(IntPtr handle,[MarshalAs(UnmanagedType.LPUTF8Str)] string paths,[Out] float[] result,int capacity,IntPtr cancel,out IntPtr error);
     internal static void Check(IntPtr error)
     {

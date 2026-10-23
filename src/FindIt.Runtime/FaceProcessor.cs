@@ -7,8 +7,9 @@ namespace FindIt.Runtime;
 internal sealed class FaceProcessor : IDisposable
 {
     private readonly RuntimePaths paths;
-    private FaceDetectorYN? detector;
-    private Size detectorSize;
+    // Creating a detector parses its model. Photos come in a few sizes (orientation, camera),
+    // so one detector is kept per input size instead of being recreated on every change.
+    private readonly Dictionary<Size,FaceDetectorYN> detectors=[];
     private Net? recognizer;
     internal bool Available=>paths.Model("face_detection_yunet_2023mar.onnx") is not null&&paths.Model("face_recognition_sface_2021dec.onnx") is not null;
     internal FaceProcessor(RuntimePaths paths)=>this.paths=paths;
@@ -19,7 +20,11 @@ internal sealed class FaceProcessor : IDisposable
         recognizer??=CvDnn.ReadNetFromOnnx(File.ReadAllBytes(paths.Model("face_recognition_sface_2021dec.onnx")!));
         using var scaled=new Mat();var ratio=Math.Min(1d,1280d/Math.Max(original.Width,original.Height));
         Cv2.Resize(original,scaled,new Size((int)(original.Width*ratio),(int)(original.Height*ratio)));
-        if(detector is null||detectorSize!=scaled.Size()){detector?.Dispose();detectorSize=scaled.Size();detector=FaceDetectorYN.Create(paths.Model("face_detection_yunet_2023mar.onnx")!,"",detectorSize,.85f,.3f,5000);}
+        if(!detectors.TryGetValue(scaled.Size(),out var detector))
+        {
+            if(detectors.Count>=8){foreach(var stale in detectors.Values)stale.Dispose();detectors.Clear();}
+            detectors[scaled.Size()]=detector=FaceDetectorYN.Create(paths.Model("face_detection_yunet_2023mar.onnx")!,"",scaled.Size(),.85f,.3f,5000);
+        }
         using var detected=new Mat();detector.Detect(scaled,detected);
         var results=new List<DetectedFace>();
         var rows=detected.Rows;
@@ -53,5 +58,5 @@ internal sealed class FaceProcessor : IDisposable
         transform.Set(1,0,b);transform.Set(1,1,a);transform.Set(1,2,cv-b*cx-a*cy);
         var result=new Mat();Cv2.WarpAffine(image,result,transform,new Size(112,112));return result;
     }
-    public void Dispose(){detector?.Dispose();recognizer?.Dispose();}
+    public void Dispose(){foreach(var detector in detectors.Values)detector.Dispose();detectors.Clear();recognizer?.Dispose();}
 }

@@ -61,6 +61,7 @@ internal static class Program
                     "people.list" => await backend.GetPeopleAsync(token).ConfigureAwait(false),
                     "people.observations" => await backend.GetPersonObservationsAsync(parameters.GetProperty("personId").GetGuid(), token).ConfigureAwait(false),
                     "people.save" => await SavePersonAsync(parameters, token).ConfigureAwait(false),
+                    "preferences.recentQueries" => await SaveRecentQueriesAsync(parameters, token).ConfigureAwait(false),
                     "playback.play" when playback is not null => playback.Play(Deserialize<PlaybackRequest>(parameters), token),
                     "playback.pause" when playback is not null => playback.Pause(),
                     "playback.stop" when playback is not null => playback.Stop(),
@@ -84,6 +85,12 @@ internal static class Program
                 catch (Exception sendError) when (sendError is IOException or OperationCanceledException or ObjectDisposedException) { }
             }
             finally { requests.TryRemove(id, out _); cancellation.Dispose(); tasks.TryRemove(id, out _); }
+        }
+
+        async Task<bool> SaveRecentQueriesAsync(JsonElement parameters, CancellationToken token)
+        {
+            await backend.SaveRecentQueriesAsync(parameters.GetProperty("queries").Deserialize<string[]>(WireJson.Options) ?? [], token).ConfigureAwait(false);
+            return true;
         }
 
         async Task<PersonRecord> SavePersonAsync(JsonElement parameters, CancellationToken token)

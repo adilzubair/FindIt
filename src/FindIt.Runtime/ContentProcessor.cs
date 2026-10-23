@@ -29,41 +29,91 @@ public sealed partial class ContentProcessor : IContentProcessor
     public async IAsyncEnumerable<ExtractedSegment> ExtractAsync(string absolutePath,FileKind kind,PreparationRequest options,[EnumeratorCancellation]CancellationToken cancellationToken=default)
     {
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var scratch=Path.Combine(paths.RootPath,"FindIt","archive","work","runtime",Guid.NewGuid().ToString("N"));
-        FileStream? scratchLease=null;
         try
         {
-            scratchLease=CreateScratch(scratch);
+            ReclaimOnce();
             if(kind is FileKind.Image or FileKind.Video || (kind==FileKind.Document&&Path.GetExtension(absolutePath).Equals(".pdf",StringComparison.OrdinalIgnoreCase)))NativeMethods.EnsureVisualDependencies(paths);
             switch(kind)
             {
                 case FileKind.Image:
-                    using(var image=await ReadImageAsync(absolutePath,scratch,cancellationToken))
+                    using(var image=await ReadImageAsync(absolutePath,cancellationToken))
                     {
-                        var jpeg=Jpeg(image,1024);var file=Path.Combine(scratch,"image.jpg");await File.WriteAllBytesAsync(file,jpeg,cancellationToken);
+                        var jpeg=Jpeg(image,1024);
                         var words=ReadOcr(jpeg,options.OcrLanguages);
-                        yield return new(){Kind=SegmentKind.Image,Text=words,ThumbnailJpeg=Jpeg(image,384),Embedding=await media.EmbedMediaAsync(file,true,cancellationToken),Faces=faces.Detect(image)};
+                        yield return new(){Kind=SegmentKind.Image,Text=words,ThumbnailJpeg=Jpeg(image,384),Embedding=await EmbedEncodedAsync(jpeg,true,"image.jpg",cancellationToken),Faces=faces.Detect(image)};
                     }
                     break;
                 case FileKind.Video:
-                    await foreach(var segment in VideoAsync(absolutePath,scratch,cancellationToken))yield return segment;
-                    if(await HasAudioAsync(absolutePath,cancellationToken))await foreach(var segment in AudioAsync(absolutePath,scratch,cancellationToken))yield return segment;
+                    await foreach(var segment in VideoAsync(absolutePath,cancellationToken))yield return segment;
+                    if(await HasAudioAsync(absolutePath,cancellationToken))await foreach(var segment in AudioAsync(absolutePath,cancellationToken))yield return segment;
                     break;
                 case FileKind.Audio:
-                    await foreach(var segment in AudioAsync(absolutePath,scratch,cancellationToken))yield return segment;
+                    await foreach(var segment in AudioAsync(absolutePath,cancellationToken))yield return segment;
                     break;
                 case FileKind.Document:
-                    await foreach(var segment in DocumentsAsync(absolutePath,scratch,options,cancellationToken))yield return segment;
+                    await foreach(var segment in DocumentsAsync(absolutePath,options,cancellationToken))yield return segment;
                     break;
             }
         }
-        finally {scratchLease?.Dispose();try{Directory.Delete(scratch,true);}catch(IOException){}catch(UnauthorizedAccessException){}gate.Release();}
+        finally {ClearScratch();gate.Release();}
     }
     public async Task<IReadOnlyList<DetectedFace>> DetectReferenceFacesAsync(string absolutePath,CancellationToken cancellationToken=default)
     {
-        await gate.WaitAsync(cancellationToken);var scratch=Path.Combine(paths.RootPath,"FindIt","archive","work","runtime",Guid.NewGuid().ToString("N"));
-        FileStream? scratchLease=null;
-        try{scratchLease=CreateScratch(scratch);NativeMethods.EnsureVisualDependencies(paths);using var image=await ReadImageAsync(absolutePath,scratch,cancellationToken);return faces.Detect(image);}finally{scratchLease?.Dispose();try{if(Directory.Exists(scratch))Directory.Delete(scratch,true);}catch(IOException){}catch(UnauthorizedAccessException){}gate.Release();}
+        await gate.WaitAsync(cancellationToken);
+        try{ReclaimOnce();NativeMethods.EnsureVisualDependencies(paths);using var image=await ReadImageAsync(absolutePath,cancellationToken);return faces.Detect(image);}finally{ClearScratch();gate.Release();}
+    }
+    // Images, frames, pages and audio windows reach the encoder from memory when the native runtime
+    // supports it. Older native builds still receive the same bytes through a scratch file.
+    private async Task<float[]?> EmbedEncodedAsync(byte[] data,bool image,string scratchName,CancellationToken token)
+    {
+        if(media.InMemoryInput)
+            try{return await media.EmbedMediaAsync(data,image,token);}
+            catch(EntryPointNotFoundException){media.InMemoryInput=false;}
+        var file=ScratchFile(scratchName);await File.WriteAllBytesAsync(file,data,token);
+        return await media.EmbedMediaAsync(file,image,token);
+    }
+    private async Task<float[]?> EmbedWindowAsync(VideoWindow window,CancellationToken token)
+    {
+        if(media.InMemoryInput&&window.Frames.All(f=>f.Jpeg is not null))
+            try{return await media.EmbedFramesAsync(window.Frames.Select(f=>f.Jpeg!).ToArray(),token);}
+            catch(EntryPointNotFoundException){media.InMemoryInput=false;}
+        var files=new List<string>();
+        foreach(var frame in window.Frames)
+        {
+            var file=Path.IsPathRooted(frame.Path)?frame.Path:ScratchFile(frame.Path);
+            if(frame.Jpeg is not null)await File.WriteAllBytesAsync(file,frame.Jpeg,token);
+            files.Add(file);
+        }
+        return await media.EmbedFramesAsync(files,token);
+    }
+    // One private scratch folder per processor, created only when an extraction needs a file.
+    // It is emptied after each original and removed with its lease on dispose.
+    private string? scratch;
+    private FileStream? scratchLease;
+    private bool reclaimed;
+    private string ScratchParent=>Path.Combine(paths.RootPath,"FindIt","archive","work","runtime");
+    private string ScratchFile(string name)
+    {
+        if(scratch is null){var folder=Path.Combine(ScratchParent,Guid.NewGuid().ToString("N"));scratchLease=CreateScratch(folder);scratch=folder;}
+        return Path.Combine(scratch,name);
+    }
+    private void ReclaimOnce()
+    {
+        if(reclaimed)return;reclaimed=true;
+        if(Directory.Exists(ScratchParent)&&(File.GetAttributes(ScratchParent)&FileAttributes.ReparsePoint)==0)ReclaimAbandonedScratch(ScratchParent);
+    }
+    private void ClearScratch()
+    {
+        if(scratch is null)return;
+        try{foreach(var entry in new DirectoryInfo(scratch).EnumerateFileSystemInfos())if(entry.Name!="active.lock"){if(entry is DirectoryInfo folder)folder.Delete(true);else entry.Delete();}}
+        catch(IOException){}catch(UnauthorizedAccessException){}
+    }
+    private void ReleaseScratch()
+    {
+        scratchLease?.Dispose();scratchLease=null;
+        if(scratch is null)return;
+        try{Directory.Delete(scratch,true);}catch(IOException){}catch(UnauthorizedAccessException){}
+        scratch=null;
     }
     private FileStream CreateScratch(string scratch)
     {
@@ -99,13 +149,13 @@ public sealed partial class ContentProcessor : IContentProcessor
             catch(IOException){}catch(UnauthorizedAccessException){}
         }
     }
-    private async Task<Mat> ReadImageAsync(string path,string scratch,CancellationToken token)
+    private async Task<Mat> ReadImageAsync(string path,CancellationToken token)
     {
         // imdecode avoids ANSI path handling inside native decoders.
         var image=Cv2.ImDecode(await File.ReadAllBytesAsync(path,token),ImreadModes.Color);
         if(!image.Empty())return image;
         image.Dispose();var ffmpeg=paths.Tool("ffmpeg.exe")??throw new InvalidDataException("Unsupported image; FFmpeg fallback is missing.");
-        var output=Path.Combine(scratch,"decoded.png");await ProcessRunner.CaptureAsync(ffmpeg,["-nostdin","-hide_banner","-loglevel","error","-i",path,"-frames:v","1","-y",output],token);
+        var output=ScratchFile("decoded.png");await ProcessRunner.CaptureAsync(ffmpeg,["-nostdin","-hide_banner","-loglevel","error","-i",path,"-frames:v","1","-y",output],token);
         image=Cv2.ImDecode(await File.ReadAllBytesAsync(output,token),ImreadModes.Color);
         if(image.Empty()){image.Dispose();throw new InvalidDataException("Unsupported or corrupt image.");}return image;
     }
@@ -114,7 +164,7 @@ public sealed partial class ContentProcessor : IContentProcessor
         using var thumb=new Mat();var scale=Math.Min(1d,(double)maxSide/Math.Max(image.Width,image.Height));Cv2.Resize(image,thumb,new Size(Math.Max(1,(int)(image.Width*scale)),Math.Max(1,(int)(image.Height*scale))));
         Cv2.ImEncode(".jpg",thumb,out var bytes,[new ImageEncodingParam(ImwriteFlags.JpegQuality,82)]);return bytes;
     }
-    private async IAsyncEnumerable<ExtractedSegment> VideoAsync(string path,string scratch,[EnumeratorCancellation]CancellationToken token)
+    private async IAsyncEnumerable<ExtractedSegment> VideoAsync(string path,[EnumeratorCancellation]CancellationToken token)
     {
         var ffmpeg=paths.Tool("ffmpeg.exe")??throw new FileNotFoundException("FFmpeg is required to prepare videos.");
         const int width=640,height=360;
@@ -132,38 +182,37 @@ public sealed partial class ContentProcessor : IContentProcessor
                 // Finalize before adding this source frame, so half-open windows never
                 // encode a later shot or a sparse VFR sample outside their declared time.
                 foreach(var window in windows.Advance(time,sceneCut))
-                    yield return new(){Kind=SegmentKind.VideoClip,StartMs=window.StartMs,EndMs=window.EndMs,Embedding=await media.EmbedFramesAsync(window.Frames.Select(f=>f.Path).ToArray(),token)};
+                    yield return new(){Kind=SegmentKind.VideoClip,StartMs=window.StartMs,EndMs=window.EndMs,Embedding=await EmbedWindowAsync(window,token)};
                 if(sceneCut)windows.Reset(time);
                 if(time>=nextVisual)
                 {
                     nextVisual=(time/1000+1)*1000;
-                    var file=Path.Combine(scratch,$"frame-{visualIndex++%8}.jpg");await File.WriteAllBytesAsync(file,Jpeg(frame,640),token);var vector=await media.EmbedMediaAsync(file,true,token);
+                    var name=$"frame-{visualIndex++%8}.jpg";var jpeg=Jpeg(frame,640);var vector=await EmbedEncodedAsync(jpeg,true,name,token);
                     // A sampled image establishes presence at this instant; it does not
                     // establish a person's presence for the following second or across a cut.
                     yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Embedding=vector,Faces=observations};
                     if(vector is not null)
                     {
-                        windows.Add(file,time);
+                        windows.Add(name,time,jpeg);
                     }
                 }
                 else if(sceneCut)
                 {
                     // Supplemental scene samples do not replace the regular temporal queue.
-                    var file=Path.Combine(scratch,"scene-cut.jpg");await File.WriteAllBytesAsync(file,Jpeg(frame,640),token);
-                    yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Embedding=await media.EmbedMediaAsync(file,true,token),Faces=observations};
+                    yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Embedding=await EmbedEncodedAsync(Jpeg(frame,640),true,"scene-cut.jpg",token),Faces=observations};
                 }
                 else if(observations.Count>0)yield return new(){Kind=SegmentKind.VideoFrame,StartMs=time,EndMs=time+1,ThumbnailJpeg=Jpeg(frame,384),Faces=observations};
         }
             long end=timeline.ResolveEnd(lastFrameTime);
             foreach(var window in windows.Advance(end,true))
-                yield return new(){Kind=SegmentKind.VideoClip,StartMs=window.StartMs,EndMs=window.EndMs,Embedding=await media.EmbedFramesAsync(window.Frames.Select(f=>f.Path).ToArray(),token)};
+                yield return new(){Kind=SegmentKind.VideoClip,StartMs=window.StartMs,EndMs=window.EndMs,Embedding=await EmbedWindowAsync(window,token)};
     }
     private async Task<bool> HasAudioAsync(string path,CancellationToken token)
     {
         var ffprobe=paths.Tool("ffprobe.exe");if(ffprobe is null)return true;
         var result=await ProcessRunner.CaptureAsync(ffprobe,["-v","error","-select_streams","a:0","-show_entries","stream=index","-of","csv=p=0",path],token);return !string.IsNullOrWhiteSpace(result);
     }
-    private async IAsyncEnumerable<ExtractedSegment> AudioAsync(string path,string scratch,[EnumeratorCancellation]CancellationToken token)
+    private async IAsyncEnumerable<ExtractedSegment> AudioAsync(string path,[EnumeratorCancellation]CancellationToken token)
     {
         var ffmpeg=paths.Tool("ffmpeg.exe")??throw new FileNotFoundException("FFmpeg is required to prepare audio.");
         var timeline=await MediaTimeline.ProbeAsync(paths.Tool("ffprobe.exe"),path,"a:0",token);
@@ -173,7 +222,7 @@ public sealed partial class ContentProcessor : IContentProcessor
         // embedding window. Each decoded sample is written to the part exactly once, so the
         // embedding windows' overlap is never transcribed twice.
         bool transcribe=paths.Tool("whisper-cli.exe") is not null&&paths.Model("ggml-small.bin") is not null;
-        var speechPath=Path.Combine(scratch,"speech.wav");FileStream? speech=null;long speechBytes=0,speechStart=0;
+        string? speechPath=null;FileStream? speech=null;long speechBytes=0,speechStart=0;
         try
         {
             while(true)
@@ -181,18 +230,18 @@ public sealed partial class ContentProcessor : IContentProcessor
                 var read=await process.StandardOutput.BaseStream.ReadAsync(samples.AsMemory(occupied),token);occupied+=read;
                 for(var pending=samples.AsMemory(occupied-read,transcribe?read:0);!pending.IsEmpty;)
                 {
-                    speech??=BeginWave(speechPath,rate);
+                    speech??=BeginWave(speechPath??=ScratchFile("speech.wav"),rate);
                     var take=(int)Math.Min(pending.Length,SpeechPartBytes-speechBytes);
                     await speech.WriteAsync(pending[..take],token);speechBytes+=take;pending=pending[take..];
                     if(speechBytes<SpeechPartBytes)continue;
-                    foreach(var segment in await TranscribePartAsync(speech,speechPath,scratch,timeline.StartMs+speechStart*1000/(rate*2),speechBytes,rate,token))yield return segment;
+                    foreach(var segment in await TranscribePartAsync(speech,speechPath!,timeline.StartMs+speechStart*1000/(rate*2),speechBytes,rate,token))yield return segment;
                     speech=null;speechStart+=speechBytes;speechBytes=0;
                 }
                 if(occupied<samples.Length&&read>0)continue;
                 if(occupied>rate*2 && (offset==0||occupied>(window-hop)*2))
                 {
-                    var wave=Path.Combine(scratch,"audio.wav");WriteWave(wave,samples,occupied,rate);var start=timeline.StartMs+offset*1000/rate;var end=start+occupied*1000/(rate*2);
-                    yield return new(){Kind=SegmentKind.Audio,StartMs=start,EndMs=end,Embedding=await media.EmbedMediaAsync(wave,false,token)};
+                    var start=timeline.StartMs+offset*1000/rate;var end=start+occupied*1000/(rate*2);
+                    yield return new(){Kind=SegmentKind.Audio,StartMs=start,EndMs=end,Embedding=await EmbedEncodedAsync(Wave(samples,occupied,rate),false,"audio.wav",token)};
                 }
                 if(read==0)break;
                 Buffer.BlockCopy(samples,hop*2,samples,0,(window-hop)*2);occupied=(window-hop)*2;offset+=hop;
@@ -200,7 +249,7 @@ public sealed partial class ContentProcessor : IContentProcessor
             await process.WaitForExitAsync(token);if(process.ExitCode!=0)throw new InvalidDataException("Audio extraction failed: "+await diagnostic);
             if(speech is not null)
             {
-                foreach(var segment in await TranscribePartAsync(speech,speechPath,scratch,timeline.StartMs+speechStart*1000/(rate*2),speechBytes,rate,token))yield return segment;
+                foreach(var segment in await TranscribePartAsync(speech,speechPath!,timeline.StartMs+speechStart*1000/(rate*2),speechBytes,rate,token))yield return segment;
                 speech=null;
             }
         }
@@ -208,21 +257,21 @@ public sealed partial class ContentProcessor : IContentProcessor
     }
     // Two hours of 16 kHz mono PCM per Whisper run keeps each WAV far below its 4 GiB limit.
     private const long SpeechPartBytes=2L*60*60*16000*2;
-    private async Task<IReadOnlyList<ExtractedSegment>> TranscribePartAsync(FileStream speech,string wave,string scratch,long startMs,long bytes,int rate,CancellationToken token)
+    private async Task<IReadOnlyList<ExtractedSegment>> TranscribePartAsync(FileStream speech,string wave,long startMs,long bytes,int rate,CancellationToken token)
     {
         try{FinishWave(speech,bytes,rate);}finally{await speech.DisposeAsync();}
         // Parts of a second or less carry no transcribable speech, as before.
         if(bytes<=rate*2)return [];
         var segments=new List<ExtractedSegment>();
-        foreach(var passage in await TranscribeAsync(wave,scratch,startMs,bytes*1000/(rate*2),token))
+        foreach(var passage in await TranscribeAsync(wave,startMs,bytes*1000/(rate*2),token))
             segments.Add(new(){Kind=SegmentKind.Transcript,StartMs=passage.StartMs,EndMs=passage.EndMs,Text=passage.Text,Embedding=await text.EmbedTextAsync(passage.Text,false,token)});
         return segments;
     }
-    private async Task<IReadOnlyList<SpeechPassage>> TranscribeAsync(string wave,string scratch,long startMs,long durationMs,CancellationToken token)
+    private async Task<IReadOnlyList<SpeechPassage>> TranscribeAsync(string wave,long startMs,long durationMs,CancellationToken token)
     {
         var whisper=paths.Tool("whisper-cli.exe");var model=paths.Model("ggml-small.bin");if(whisper is null||model is null)return [];
         await ModelIntegrity.VerifyAsync(model,"ggml-small.bin",token);
-        var output=Path.Combine(scratch,"speech");
+        var output=ScratchFile("speech");File.Delete(output+".json");
         var arguments=new List<string>{"-m",model,"-f",wave,"-l","auto","-oj","-of",output,"-t",Math.Clamp(Environment.ProcessorCount/2,1,8).ToString(CultureInfo.InvariantCulture),"-np"};
         if(paths.Model("ggml-silero-v6.2.0.bin") is { } vad)
         {
@@ -233,9 +282,9 @@ public sealed partial class ContentProcessor : IContentProcessor
         using var json=JsonDocument.Parse(await File.ReadAllTextAsync(output+".json",token));
         return SpeechTimestamps.Parse(json.RootElement,startMs,durationMs);
     }
-    private static void WriteWave(string path,byte[] samples,int count,int rate)
+    private static byte[] Wave(byte[] samples,int count,int rate)
     {
-        using var stream=File.Create(path);WriteWaveHeader(stream,(uint)count,rate);stream.Write(samples,0,count);
+        using var stream=new MemoryStream(44+count);WriteWaveHeader(stream,(uint)count,rate);stream.Write(samples,0,count);return stream.ToArray();
     }
     private static FileStream BeginWave(string path,int rate)
     {
@@ -247,5 +296,10 @@ public sealed partial class ContentProcessor : IContentProcessor
     {
         using var writer=new BinaryWriter(stream,System.Text.Encoding.UTF8,leaveOpen:true);writer.Write("RIFF"u8);writer.Write(checked(36+count));writer.Write("WAVEfmt "u8);writer.Write(16);writer.Write((short)1);writer.Write((short)1);writer.Write(rate);writer.Write(rate*2);writer.Write((short)2);writer.Write((short)16);writer.Write("data"u8);writer.Write(count);
     }
-    public async ValueTask DisposeAsync(){await media.DisposeAsync();await text.DisposeAsync();faces.Dispose();ocr?.Dispose();}
+    public async ValueTask DisposeAsync()
+    {
+        await gate.WaitAsync();
+        try{ReleaseScratch();}finally{gate.Release();}
+        await media.DisposeAsync();await text.DisposeAsync();faces.Dispose();ocr?.Dispose();
+    }
 }

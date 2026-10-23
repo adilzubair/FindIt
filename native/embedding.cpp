@@ -85,12 +85,20 @@ API int fi_embed_text(engine* e,const char* text,int query,float* result,int cap
         int pos=0;for(auto t:tokens)add_token(e,t,pos);return finish(e,result,capacity,cancel);
     }catch(const std::exception& ex){if(e)llama_batch_ext_clear(e->batch);error_out(error,ex.what());return -1;}
 }
-API int fi_embed_media(engine* e,const char* path,int image,float* result,int capacity,volatile int32_t* cancel,char** error){
+// Encoded input comes from a scratch file or, without that round trip, from caller-owned memory.
+// Both decode through mtmd_helper_bitmap_init_from_buf, whose content hash keys the projection cache.
+struct encoded {const char* path;const unsigned char* data;size_t length;};
+static mtmd_bitmap* decode(engine* e,const encoded& input){
+    if(!input.path&&(!input.data||input.length==0))throw std::runtime_error("Empty media input.");
+    // Managed caller uses ASCII scratch names to avoid narrow fopen path encoding in upstream mtmd.
+    return input.path?mtmd_helper_bitmap_init_from_file(e->media,input.path,false,mtmd_helper_init_opt_default()).bitmap
+        :mtmd_helper_bitmap_init_from_buf(e->media,input.data,input.length,false,mtmd_helper_init_opt_default()).bitmap;
+}
+static int embed_media(engine* e,const encoded& input,float* result,int capacity,volatile int32_t* cancel,char** error){
     if(error)*error=nullptr;
     mtmd_bitmap* bitmap=nullptr;mtmd_input_chunks* chunks=nullptr;
     try{if(!e||!e->media)throw std::runtime_error("Media encoder is unavailable.");
-        // Managed caller uses ASCII scratch names to avoid narrow fopen path encoding in upstream mtmd.
-        bitmap=mtmd_helper_bitmap_init_from_file(e->media,path,false,mtmd_helper_init_opt_default()).bitmap;if(!bitmap)throw std::runtime_error("Cannot decode media input.");
+        bitmap=decode(e,input);if(!bitmap)throw std::runtime_error("Cannot decode media input.");
         chunks=mtmd_input_chunks_init();const mtmd_bitmap* bitmaps[]={bitmap};const char* marker=mtmd_default_marker();
         mtmd_input_text text={marker,std::strlen(marker),true,true};
         if(mtmd_tokenize(e->media,chunks,&text,bitmaps,1)!=0)throw std::runtime_error("Cannot tokenize media input.");
@@ -104,18 +112,25 @@ API int fi_embed_media(engine* e,const char* path,int image,float* result,int ca
         int n=finish(e,result,capacity,cancel);mtmd_input_chunks_free(chunks);mtmd_bitmap_free(bitmap);return n;
     }catch(const std::exception& ex){if(chunks)mtmd_input_chunks_free(chunks);if(bitmap)mtmd_bitmap_free(bitmap);if(e)llama_batch_ext_clear(e->batch);error_out(error,ex.what());return -1;}
 }
+API int fi_embed_media(engine* e,const char* path,int image,float* result,int capacity,volatile int32_t* cancel,char** error){
+    if(!path){if(error)*error=nullptr;error_out(error,"Null media path.");return -1;}
+    return embed_media(e,{path,nullptr,0},result,capacity,cancel,error);
+}
+API int fi_embed_media_buffer(engine* e,const unsigned char* data,size_t length,int image,float* result,int capacity,volatile int32_t* cancel,char** error){
+    return embed_media(e,{nullptr,data,length},result,capacity,cancel,error);
+}
 // Ordered frames pass through one shared non-causal sequence, allowing attention across frame boundaries.
-API int fi_embed_frames(engine* e,const char* paths,float* result,int capacity,volatile int32_t* cancel,char** error){
+static int embed_frames(engine* e,const std::vector<encoded>& frames,float* result,int capacity,volatile int32_t* cancel,char** error){
     if(error)*error=nullptr;
     std::vector<mtmd_bitmap*> bitmaps;mtmd_input_chunks* chunks=nullptr;
     try{
         if(!e||!e->media)throw std::runtime_error("Media encoder is unavailable.");
-        std::string list(paths),prompt;size_t start=0;
-        while(start<list.size()){
-            auto end=list.find('\n',start);auto path=list.substr(start,end==std::string::npos?end:end-start);
-            auto bitmap=mtmd_helper_bitmap_init_from_file(e->media,path.c_str(),false,mtmd_helper_init_opt_default()).bitmap;
+        if(frames.empty()||frames.size()>8)throw std::runtime_error("Clip requires 1 to 8 ordered frames.");
+        std::string prompt;
+        for(auto& frame:frames){
+            auto bitmap=decode(e,frame);
             if(!bitmap)throw std::runtime_error("Cannot decode clip frame.");mtmd_bitmap_set_mergeable(bitmap,true);bitmaps.push_back(bitmap);
-            prompt+=mtmd_default_marker();if(end==std::string::npos)break;start=end+1;
+            prompt+=mtmd_default_marker();
         }
         if(bitmaps.empty()||bitmaps.size()>8)throw std::runtime_error("Clip requires 1 to 8 ordered frames.");
         chunks=mtmd_input_chunks_init();mtmd_input_text text={prompt.c_str(),prompt.size(),true,true};
@@ -129,4 +144,16 @@ API int fi_embed_frames(engine* e,const char* paths,float* result,int capacity,v
         }
         int n=finish(e,result,capacity,cancel);mtmd_input_chunks_free(chunks);for(auto b:bitmaps)mtmd_bitmap_free(b);return n;
     }catch(const std::exception& ex){if(chunks)mtmd_input_chunks_free(chunks);for(auto b:bitmaps)mtmd_bitmap_free(b);if(e)llama_batch_ext_clear(e->batch);error_out(error,ex.what());return -1;}
+}
+API int fi_embed_frames(engine* e,const char* paths,float* result,int capacity,volatile int32_t* cancel,char** error){
+    std::vector<std::string> names;std::vector<encoded> frames;
+    if(paths){std::string list(paths);size_t start=0;
+        while(start<list.size()){auto end=list.find('\n',start);names.push_back(list.substr(start,end==std::string::npos?end:end-start));if(end==std::string::npos)break;start=end+1;}}
+    for(auto& name:names)frames.push_back({name.c_str(),nullptr,0});
+    return embed_frames(e,frames,result,capacity,cancel,error);
+}
+API int fi_embed_frame_buffers(engine* e,const unsigned char* const* data,const size_t* lengths,int count,float* result,int capacity,volatile int32_t* cancel,char** error){
+    std::vector<encoded> frames;
+    if(data&&lengths)for(int i=0;i<count;++i)frames.push_back({nullptr,data[i],lengths[i]});
+    return embed_frames(e,frames,result,capacity,cancel,error);
 }

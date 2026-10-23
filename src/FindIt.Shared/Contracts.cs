@@ -40,6 +40,10 @@ public sealed record ArchiveStatus
     public IReadOnlyList<FolderEntry> Folders { get; init; } = [];
     public IReadOnlyList<ArchiveIssue> Issues { get; init; } = [];
     public IReadOnlyList<RuntimeCapability> Capabilities { get; init; } = [];
+    /// <summary>The folders chosen for the last preparation, so Update and Resume start from them.</summary>
+    public IReadOnlyList<string> PreparationFolders { get; init; } = [];
+    /// <summary>Recent searches, newest first. Stored on the drive with the library, never on the PC.</summary>
+    public IReadOnlyList<string> RecentQueries { get; init; } = [];
 }
 
 public sealed record RuntimeCapability(string Id, string Name, bool Available, string Detail);
@@ -147,6 +151,8 @@ public sealed record PreparationProgress
     public string CurrentPath { get; init; } = "";
     public string Message { get; init; } = "";
     public double? Fraction { get; init; }
+    /// <summary>Estimated from the measured preparation rate; null until there is enough to measure.</summary>
+    public long? SecondsRemaining { get; init; }
 }
 
 public sealed record PersonRecord
@@ -209,6 +215,7 @@ public interface IArchiveBackend : IAsyncDisposable
     Task<IReadOnlyList<PersonObservation>> GetPersonObservationsAsync(Guid personId, CancellationToken cancellationToken = default);
     Task<PersonRecord> SavePersonAsync(PersonUpdateRequest request, CancellationToken cancellationToken = default);
     Task<PreviewResult> GetPreviewAsync(PreviewRequest request, CancellationToken cancellationToken = default);
+    Task SaveRecentQueriesAsync(IReadOnlyList<string> queries, CancellationToken cancellationToken = default);
 }
 
 public sealed record ExtractedSegment

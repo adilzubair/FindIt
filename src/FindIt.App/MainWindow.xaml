@@ -562,7 +562,7 @@
                     <ColumnDefinition x:Name="PreviewColumn" Width="0" MinWidth="0" />
                   </Grid.ColumnDefinitions>
                   <Grid x:Name="LibraryResultsPanel">
-                    <local:RowGallery x:Name="Gallery" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource RowContainer}" VirtualizingPanel.CacheLength="1,1"
+                    <local:RowGallery x:Name="Gallery" ScrollViewer.ScrollChanged="ResultsScrollChanged" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource RowContainer}" VirtualizingPanel.CacheLength="1,1"
                                       ScrollViewer.VerticalScrollBarVisibility="Auto" SizeChanged="GallerySizeChanged" Style="{StaticResource {x:Type ListBox}}" Padding="4,4,0,0"
                                       AutomationProperties.Name="Files. Use arrow keys to move between files.">
                       <ListBox.ItemTemplate>
@@ -584,7 +584,7 @@
                     </local:RowGallery>
                     <Border x:Name="MetadataListFrame" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="4,0,4,4"
                             Visibility="{Binding Visibility, ElementName=MetadataList}">
-                      <ListView x:Name="MetadataList" Visibility="Collapsed" ItemsSource="{Binding CurrentTiles}" SelectionChanged="ResultSelectionChanged" MouseDoubleClick="ListDoubleClick"
+                      <ListView x:Name="MetadataList" ScrollViewer.ScrollChanged="ResultsScrollChanged" Visibility="Collapsed" ItemsSource="{Binding CurrentTiles}" SelectionChanged="ResultSelectionChanged" MouseDoubleClick="ListDoubleClick"
                                 BorderThickness="0" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <ListView.View>
                           <GridView>
@@ -1077,7 +1077,7 @@
                       </StackPanel>
                     </DockPanel>
                     <ProgressBar x:Name="PreparationProgressBar" Height="6" Margin="0,16,0,14" Maximum="1" AutomationProperties.Name="Preparation progress" />
-                    <UniformGrid x:Name="StageStrip" Columns="5" />
+                    <UniformGrid x:Name="StageStrip" Columns="4" />
                     <TextBlock x:Name="ProgressPath" Style="{StaticResource CaptionText}" TextTrimming="CharacterEllipsis" Margin="0,14,0,0" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
                     <TextBlock x:Name="ProgressMessage" Style="{StaticResource SecondaryText}" Margin="0,8,0,0" />
                     <TextBlock Text="Search keeps working with files that are already prepared. Keep the drive connected until this finishes or you pause." Style="{StaticResource SecondaryText}" Margin="0,8,0,0" />

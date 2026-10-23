@@ -1,6 +1,6 @@
 namespace FindIt.Runtime;
 
-internal sealed record VideoWindowFrame(string Path,long StartMs);
+internal sealed record VideoWindowFrame(string Path,long StartMs,byte[]? Jpeg=null);
 internal sealed record VideoWindow(long StartMs,long EndMs,IReadOnlyList<VideoWindowFrame> Frames);
 
 /// <summary>Schedules bounded visual windows by presentation time, never by frame count.</summary>
@@ -12,10 +12,10 @@ internal sealed class VideoWindowScheduler
 
     internal void Reset(long shotStartMs){frames.Clear();start=lastPublishedEnd=shotStartMs;initialized=true;}
 
-    internal void Add(string path,long time)
+    internal void Add(string path,long time,byte[]? jpeg=null)
     {
         if(!initialized)Reset(time);
-        frames.Enqueue(new(path,time));while(frames.Count>8)frames.Dequeue();
+        frames.Enqueue(new(path,time,jpeg));while(frames.Count>8)frames.Dequeue();
     }
 
     internal IEnumerable<VideoWindow> Advance(long time,bool endShot=false)

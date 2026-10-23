@@ -43,6 +43,24 @@ public sealed class WorkerTests
     }
 
     [TestMethod]
+    public async Task ClientRestartsACrashedReaderAndRetriesTheRequest()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_root, "Documents", "plain.txt"), "forest document");
+        var previous = Environment.GetEnvironmentVariable("FINDIT_WORKER_PATH");
+        Environment.SetEnvironmentVariable("FINDIT_WORKER_PATH", FindExecutable());
+        try
+        {
+            await using var client = (WorkerArchiveClient)await WorkerArchiveClient.CreateAsync(_root);
+            var first = await client.GetDiagnosticsAsync();
+            using (var crashed = Process.GetProcessById(first.ProcessId)) { crashed.Kill(); await crashed.WaitForExitAsync(); }
+            var status = await client.GetStatusAsync();
+            Assert.AreEqual(0, status.FileCount);
+            Assert.AreNotEqual(first.ProcessId, (await client.GetDiagnosticsAsync()).ProcessId, "A new reader process should serve requests after the crash.");
+        }
+        finally { Environment.SetEnvironmentVariable("FINDIT_WORKER_PATH", previous); }
+    }
+
+    [TestMethod]
     public async Task ReaderRejectsPreparationAndKeepsTheDriveUnmodified()
     {
         await File.WriteAllTextAsync(Path.Combine(_root, "Documents", "plain.txt"), "forest document");
@@ -144,15 +162,21 @@ public sealed class WorkerTests
     }
 
     [TestMethod]
-    public async Task KilledReaderFailsPromptlyWithoutTakingDownItsClient()
+    public async Task ReaderThatKeepsCrashingFailsPromptlyWithoutTakingDownItsClient()
     {
         FindExecutable(); // Explicitly skip if the worker has not been built.
         await using var backend = await WorkerArchiveClient.CreateAsync(_root);
         var client = (WorkerArchiveClient)backend;
-        var diagnostics = await client.GetDiagnosticsAsync();
-        using var ownedWorker = Process.GetProcessById(diagnostics.ProcessId);
-        ownedWorker.Kill(entireProcessTree: true);
-        await ownedWorker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        async Task KillReaderAsync()
+        {
+            using var ownedWorker = Process.GetProcessById((await client.GetDiagnosticsAsync()).ProcessId);
+            ownedWorker.Kill(entireProcessTree: true);
+            await ownedWorker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        // The first crash is recovered by a restart; a second one within ten seconds is reported.
+        await KillReaderAsync();
+        await client.GetStatusAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await KillReaderAsync();
         var failure = await Assert.ThrowsAsync<IOException>(async () => await client.GetStatusAsync().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.IsFalse(string.IsNullOrWhiteSpace(failure.Message));
         Assert.IsTrue(Directory.Exists(_root));
