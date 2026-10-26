@@ -15,6 +15,12 @@
   <img alt="Platform: Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-0078D4" />
 </p>
 
+<p align="center">
+  <a href="docs/media/findit-demo.mp4"><img src="docs/media/findit-demo.webp" alt="FindIt demo: a search for &quot;dog running on the beach&quot; finds the right photos, then a video moment, a voice memo, an invoice number inside a PDF and the drive page" width="880" /></a>
+  <br />
+  <sub>A 38-second tour of the real app. <a href="docs/media/findit-demo.mp4">Watch it with sound</a> · <a href="docs/media/CREDITS.md">media credits</a></sub>
+</p>
+
 Prepare an external drive once on a capable Windows PC. Then plug it into any other Windows PC and search everything on it — by filename, by the exact words inside a document, or by meaning ("red bicycle in a forest", "someone speaking about invoices") — with no installation, no internet connection and no cloud account.
 
 The application, AI models, previews, search index and people data all live on the drive next to your files. Your originals stay exactly where they are and are only ever read.

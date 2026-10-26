@@ -4,6 +4,10 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- A 38-second demo video at the top of the README, recorded from the real app on a demo library ([credits](docs/media/CREDITS.md)).
+
 ## [0.1.0-preview.9] - 2026-10-23
 
 First version prepared for public release. Earlier previews were distributed privately for testing.
