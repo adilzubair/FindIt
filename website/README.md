@@ -2,30 +2,30 @@
 
 The public site at [findit.muhamedadil.com](https://findit.muhamedadil.com/). It is plain HTML, CSS and JavaScript modules, with no framework and no server.
 
-The design is deliberately quiet: white space, system fonts (Segoe UI Variable on Windows, SF Pro on Apple devices), the app's blue, and one line of text per section. The page opens on a working search over a sample drive of 37 files with meaningless names. Only the matches appear, each saying why it matched. Visitors can then drop their own files and search those too. Everything runs in the visitor's browser: files are never uploaded, and the page loads nothing from other origins.
+The design is deliberately quiet: white space, system fonts (Segoe UI Variable on Windows, SF Pro on Apple devices), the app's blue, and one line of text per section. The page opens on a working search over a sample drive of 37 files with meaningless names. Only the matches appear, each saying why it matched. The search runs in the visitor's browser, and the page loads nothing from other origins. It searches the sample drive only: visitors are never asked for their own files.
 
 ## How the demo works
 
 | Piece | What it does |
 |---|---|
 | `public/demo/shared.js` | Search logic shared with the indexing tool: chunking, exact-word matching, scoring and match cut-offs |
-| `public/demo/worker.js` | Runs [MobileCLIP-S0](https://github.com/apple/ml-mobileclip) with [Transformers.js](https://github.com/huggingface/transformers.js) in a Web Worker: WebGPU for images when available, otherwise WebAssembly |
-| `public/demo/engine.js` | Loads the prepared sample drive and prepares visitors' files: photos, one still per second of video, PDF text through [PDF.js](https://mozilla.github.io/pdf.js/), and plain-text files |
+| `public/demo/worker.js` | Runs the text half of [MobileCLIP-S0](https://github.com/apple/ml-mobileclip) with [Transformers.js](https://github.com/huggingface/transformers.js) in a Web Worker, on WebAssembly |
+| `public/demo/engine.js` | Loads the prepared sample drive and turns typed searches into vectors |
 | `public/demo/drive.js` | The search box, result cards and file viewer |
 | `public/samples/` | The sample drive and its prepared `index.json` |
 
-Pictures and video stills are compared with the query through the image–text model. Documents are split into passages and compared with the query through the same model's text encoder, alongside exact-word matching. Suggested searches are embedded ahead of time, so they answer instantly. A typed search fetches the 43 MB text model on first use, and adding your own photos or videos also fetches the 46 MB image model. The WebAssembly runtime adds 27 MB. Browsers cache all of it.
+The sample drive is prepared ahead of time with both halves of the model: photos and one still per second of video through the image encoder, document passages through the text encoder. In the browser, only the query needs embedding, so the page ships just the 43 MB text encoder and the 27 MB WebAssembly runtime, fetched on the first typed search and then cached. Suggested searches are embedded ahead of time too, so they answer with no download at all. Exact-word matching runs alongside.
 
-This is a sketch of FindIt, not the app: the page says so and compares the two.
+This is a sketch of FindIt, not the app, and the page says so.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `public/` | The site as published, apart from the generated parts below |
-| `build.mjs` | Assembles `_site/`: copies `public/`, the demo runtime from `node_modules`, the model, the tour video and the favicon |
+| `build.mjs` | Assembles `_site/`: copies `public/`, the runtime from `node_modules`, the text model, the tour video and the favicon |
 | `tools/models.mjs` | The demo model, pinned to one Hugging Face revision, and its one-time download into `.cache/` |
-| `tools/index-samples.mjs` | Prepares the sample drive into `public/samples/index.json` and a still strip per video |
+| `tools/index-samples.mjs` | Prepares the sample drive into `public/samples/index.json` and a still strip per video, reading PDFs with [PDF.js](https://mozilla.github.io/pdf.js/) |
 
 ## Preview
 
@@ -59,18 +59,17 @@ One-time setup:
 2. **Custom domain:** `findit.muhamedadil.com`, then enable **Enforce HTTPS** once the certificate is issued. `public/CNAME` records the domain, but Pages deployed from Actions reads it from the settings.
 3. **DNS:** a `CNAME` record for `findit` pointing to `adilzubair.github.io`.
 
-GitHub Pages is free for public repositories. Its published soft limit is 100 GB of bandwidth a month; a visitor who uses every part of the demo downloads about 120 MB once. If the demo ever gets that popular, serve `models/` and `vendor/` from a bucket with free egress and point `worker.js` at it.
+GitHub Pages is free for public repositories. Its published soft limit is 100 GB of bandwidth a month; a visitor who types their own search downloads about 70 MB once, and one who only clicks suggestions downloads under 10 MB. If the demo ever gets that popular, serve `models/` and `vendor/` from a bucket with free egress and point `worker.js` at it.
 
 ## Principles
 
 - Nothing is loaded from other origins. Code and the model are served from this site, text uses system fonts, and there are no analytics or cookies. The footer says so, and it should stay true.
 - Keep it short. Each section has a heading and at most one line beneath it; detail lives in the repository docs.
-- Visitors' files stay in the tab. They are read through object URLs and forgotten when the tab closes or the visitor chooses **Forget these files**.
-- Claims match [validation status](../docs/validation.md). Update the Status section when a release gate is passed.
+- Claims match [validation status](../docs/validation.md).
 
 ## Credits
 
 - Sample photos: [COCO 2017](https://cocodataset.org/) validation images, each under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) by its Flickr author; the full list is in [demo media credits](../docs/media/CREDITS.md). The three sample videos are slow pushes over some of the same photos. The documents are fictional.
 - Model: [MobileCLIP-S0](https://huggingface.co/Xenova/mobileclip_s0) by Apple, under the Apple sample code licence served next to it as `models/mobileclip_s0/LICENSE`.
-- Runtime: [Transformers.js](https://github.com/huggingface/transformers.js) and [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (Apache-2.0 and MIT), [PDF.js](https://github.com/mozilla/pdf.js) (Apache-2.0).
+- Runtime: [Transformers.js](https://github.com/huggingface/transformers.js) and [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (Apache-2.0 and MIT). The indexer also uses [PDF.js](https://github.com/mozilla/pdf.js) (Apache-2.0).
 - The tour video and app screenshot show the real FindIt app; see [demo media credits](../docs/media/CREDITS.md).

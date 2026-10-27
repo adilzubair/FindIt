@@ -22,16 +22,15 @@ await mkdir(join(out, 'media'), { recursive: true });
 await cp(join(root, 'docs/media/findit-demo.mp4'), join(out, 'media/findit-demo.mp4'));
 await cp(join(root, 'src/FindIt.App/Assets/FindIt.ico'), join(out, 'favicon.ico'));
 
-// The in-browser demo: Transformers.js with its WebAssembly runtime, PDF.js, and the model files.
+// The in-browser search: Transformers.js with its WebAssembly runtime, and the text half of the model.
 const vendor = {
   '@huggingface/transformers/dist/transformers.min.js': 'transformers.min.js',
   'onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs': 'ort-wasm-simd-threaded.asyncify.mjs',
   'onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm': 'ort-wasm-simd-threaded.asyncify.wasm',
-  'pdfjs-dist/build/pdf.min.mjs': 'pdf.min.mjs',
-  'pdfjs-dist/build/pdf.worker.min.mjs': 'pdf.worker.min.mjs',
 };
 for (const [from, to] of Object.entries(vendor)) await cp(join(modules, from), join(out, 'vendor', to));
-await cp(await ensureModel(), join(out, 'models', MODEL.id), { recursive: true });
+const model = await ensureModel();
+for (const file of MODEL.site) await cp(join(model, file), join(out, 'models', MODEL.id, file));
 
 if (process.argv.includes('--release')) {
   const release = await latestRelease();

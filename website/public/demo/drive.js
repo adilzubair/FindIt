@@ -14,14 +14,6 @@ const REASON = {
 
 const reasonText = (hit, reason) => (reason === 'moment' ? `${clock(hit.moment.start)}–${clock(hit.moment.end)}` : REASON[reason]);
 
-export const describe = (files) => {
-  const count = (kind) => files.filter((f) => f.kind === kind).length;
-  const parts = [['photo', 'photo'], ['video', 'video'], ['document', 'document']]
-    .map(([kind, word]) => [count(kind), word]).filter(([n]) => n)
-    .map(([n, word]) => `${n} ${word}${n === 1 ? '' : 's'}`);
-  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] ?? 'no files';
-};
-
 // Renders the visible part of a document, starting at its first match, with the match marked.
 export function paperText(target, text, { places = [], chunk = null } = {}, around = 260) {
   target.replaceChildren();
@@ -42,16 +34,11 @@ export function paperText(target, text, { places = [], chunk = null } = {}, arou
   if (to < text.length) target.append('…');
 }
 
-// A video still: sample videos use one prepared strip, visitors' videos keep a small image per still.
+// A video still, cut from the strip of stills the sample index prepared for each video.
 function frameStyle(target, file, index) {
-  if (file.strip) {
-    target.style.backgroundImage = `url("${file.strip}")`;
-    target.style.backgroundSize = `${file.frames.length * 100}% 100%`;
-    target.style.backgroundPosition = `${file.frames.length > 1 ? (index / (file.frames.length - 1)) * 100 : 0}% 0`;
-  } else {
-    target.style.backgroundImage = `url("${file.frames[index].thumb}")`;
-    target.style.backgroundSize = 'cover';
-  }
+  target.style.backgroundImage = `url("${file.strip}")`;
+  target.style.backgroundSize = `${file.frames.length * 100}% 100%`;
+  target.style.backgroundPosition = `${file.frames.length > 1 ? (index / (file.frames.length - 1)) * 100 : 0}% 0`;
 }
 
 export class Drive {
@@ -66,8 +53,11 @@ export class Drive {
     this.hints = root.querySelector('.hints');
     this.query = '';
 
+    this.library = library;
+    this.idle = idle;
     this.renderHints(suggestions);
-    this.update({ library, idle });
+    this.renderPeek();
+    this.reset();
 
     this.form.addEventListener('submit', (event) => { event.preventDefault(); this.run(this.input.value); });
     let typing;
@@ -77,15 +67,6 @@ export class Drive {
       // Search as you type once the model is here; before that, wait for Enter so nothing downloads by accident.
       if (ready.text || this.library.queries?.[this.input.value.trim()]) typing = window.setTimeout(() => this.run(this.input.value), 260);
     });
-  }
-
-  // Swaps in a set of files, for example after the visitor adds more.
-  update({ library, idle }) {
-    this.library = library;
-    this.idle = idle;
-    this.input.value = '';
-    this.renderPeek();
-    this.reset();
   }
 
   renderHints(suggestions) {
@@ -197,7 +178,7 @@ export class Drive {
   }
 }
 
-// One viewer, shared by every drive on the page.
+// The file viewer opened from a result.
 export class Viewer {
   constructor(dialog) {
     this.dialog = dialog;

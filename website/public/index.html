@@ -22,14 +22,15 @@
 </head>
 <body>
   <header class="bar">
-    <div class="wrap bar__row">
-      <a class="brand" href="#top" aria-label="FindIt home"><img src="media/findit-icon.png" alt="" width="24" height="24"><span>FindIt</span></a>
-      <nav class="bar__nav" aria-label="Main">
-        <a href="#yours">Try your files</a>
+    <nav class="bar__pill" aria-label="Main">
+      <a class="brand" href="#top" aria-label="FindIt home"><img src="media/findit-icon.png" alt="" width="22" height="22"><span>FindIt</span></a>
+      <span class="bar__links">
+        <a href="#features">Features</a>
+        <a href="#app">The app</a>
         <a href="https://github.com/adilzubair/FindIt">GitHub</a>
-        <a class="pill pill--small" href="#download">Download</a>
-      </nav>
-    </div>
+      </span>
+      <a class="pill pill--small" href="#download">Download</a>
+    </nav>
   </header>
 
   <main>
@@ -59,47 +60,7 @@
       </div>
     </section>
 
-    <section class="section section--soft" id="yours">
-      <div class="wrap">
-        <h2 class="heading">Now try your own files.</h2>
-        <p class="sub">Photos, a short video, a PDF. They never leave this tab.</p>
-
-        <div class="yours" data-state="empty">
-          <label class="slot" for="own-files">
-            <input id="own-files" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/avif,video/*,application/pdf,.pdf,.txt,.md,.csv,.html,.json">
-            <span class="slot__plus" aria-hidden="true"></span>
-            <span class="slot__title">Drop files here</span>
-            <span class="slot__hint">or <u>choose them</u> · up to 60</span>
-          </label>
-
-          <div class="prep" hidden>
-            <p class="prep__now" aria-live="polite">Loading the model</p>
-            <div class="track"><span class="track__fill"></span></div>
-            <p class="prep__count"></p>
-          </div>
-
-          <div class="drive" id="own-drive" hidden>
-            <form class="seek" role="search">
-              <svg class="seek__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-              <label class="visually-hidden" for="own-query">Search your files</label>
-              <input id="own-query" type="search" placeholder="Search your files" autocomplete="off" spellcheck="false" enterkeyhint="search">
-              <span class="seek__busy" aria-hidden="true"></span>
-            </form>
-            <div class="hints" aria-label="Suggested searches"></div>
-            <p class="readout" aria-live="polite"></p>
-            <ol class="results" aria-label="Results"></ol>
-            <div class="yours__actions">
-              <label class="textlink" for="own-files">Add more files</label>
-              <button class="textlink" type="button" data-forget>Forget these files</button>
-            </div>
-          </div>
-          <ul class="skipped" hidden></ul>
-        </div>
-        <p class="fine">The first time, your browser fetches a small search model (about 115 MB) from this site. This page is a sketch: the app also searches speech, scanned pages and faces, across a whole drive.</p>
-      </div>
-    </section>
-
-    <section class="section" id="features">
+    <section class="section section--soft" id="features">
       <div class="wrap">
         <h2 class="heading">One search for everything you keep.</h2>
         <div class="bento">
@@ -125,7 +86,7 @@
       </div>
     </section>
 
-    <section class="section section--soft" id="app">
+    <section class="section" id="app">
       <div class="wrap">
         <h2 class="heading">It all lives on the drive.</h2>
         <p class="sub">Prepare it once. Plug it into any Windows PC and search. Nothing to install, no internet, no account.</p>

@@ -1,4 +1,4 @@
-// The model the in-browser demo runs, pinned to one revision so the prepared sample index always matches it.
+// The model behind the demo, pinned to one revision so the prepared sample index always matches it.
 // Files are fetched once into website/.cache/models and served from the site itself, never from Hugging Face.
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, stat } from 'node:fs/promises';
@@ -22,6 +22,8 @@ export const MODEL = {
     'onnx/vision_model.onnx',
   ],
   dtype: { text: 'q8', vision: 'fp32' },
+  // The page only embeds typed searches, so it ships the text half. The image half is used by tools/index-samples.mjs.
+  site: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'LICENSE', 'onnx/text_model_quantized.onnx'],
 };
 
 export const modelRoot = join(dirname(fileURLToPath(import.meta.url)), '../.cache/models');
