@@ -4,6 +4,8 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.0-preview.10] - 2026-10-27
+
 ### Added
 
 - A 38-second demo video at the top of the README, recorded from the real app on a demo library ([credits](docs/media/CREDITS.md)).
@@ -60,6 +62,7 @@ First version prepared for public release. Earlier previews were distributed pri
 - Resumable, crash-safe preparation with immutable checksummed generations.
 - Signed offline updates, reproducible builds with pinned dependencies, benchmarks and recovery validation tools.
 
-[Unreleased]: https://github.com/adilzubair/FindIt/compare/v0.1.0-preview.9...HEAD
+[Unreleased]: https://github.com/adilzubair/FindIt/compare/v0.1.0-preview.10...HEAD
+[0.1.0-preview.10]: https://github.com/adilzubair/FindIt/compare/v0.1.0-preview.9...v0.1.0-preview.10
 [0.1.0-preview.9]: https://github.com/adilzubair/FindIt/releases/tag/v0.1.0-preview.9
 [0.1.0-preview.1]: https://github.com/adilzubair/FindIt/commit/a5e3501
