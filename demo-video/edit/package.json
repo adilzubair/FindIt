@@ -1,0 +1,24 @@
+{
+  "name": "findit-demo-edit",
+  "private": true,
+  "description": "The FindIt demo video, edited with Remotion from takes recorded in the real app.",
+  "scripts": {
+    "prepare-assets": "node prepare.mjs",
+    "studio": "remotion studio",
+    "render": "remotion render Demo out/findit-demo.mp4 --crf=21",
+    "export": "node export.mjs",
+    "still": "remotion still Demo out/still.png",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.539",
+    "@remotion/media-utils": "4.0.539",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.539"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}

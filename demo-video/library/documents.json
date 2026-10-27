@@ -1,0 +1,85 @@
+{
+  "comment": "Fictional documents. 'html' files are printed to PDF by Edge; 'scan' turns the PDF into a photographed-looking, image-only PDF so FindIt has to OCR it.",
+  "pdf": [
+    { "path": "Documents/Home/Tenancy agreement - signed.pdf", "html": "tenancy.html", "date": "2025-09-02T19:20", "scan": true },
+    { "path": "Documents/Home/Electricity bill - September 2026.pdf", "html": "electricity.html", "date": "2026-10-06T09:00" },
+    { "path": "Documents/Home/Car insurance - policy schedule.pdf", "html": "insurance.html", "date": "2026-03-14T12:30" },
+    { "path": "Documents/Travel/Boarding pass - LIS to OPO.pdf", "html": "boarding.html", "date": "2026-03-06T19:02" },
+    { "path": "Documents/Travel/Kaya Cave Suites - booking confirmation.pdf", "html": "hotel.html", "date": "2025-02-27T21:15" },
+    { "path": "Documents/Travel/Ferry tickets - 12 August.pdf", "html": "ferry.html", "date": "2025-08-10T16:44" },
+    { "path": "Documents/Travel/Fjellbu cabin - arrival guide.pdf", "html": "cabin.html", "date": "2025-01-30T10:05" },
+    { "path": "Documents/Work/Invoice INV-2026-031.pdf", "html": "invoice.html", "date": "2026-09-30T17:10" }
+  ],
+  "docx": [
+    {
+      "path": "Documents/Home/Lemon drizzle cake.docx", "date": "2025-10-01T20:30",
+      "title": "Lemon drizzle cake",
+      "paragraphs": [
+        "Grandma's recipe. Serves 10. Bake at 180 °C (160 °C fan) for 45 to 50 minutes.",
+        "## Ingredients",
+        "- 225 g soft butter",
+        "- 225 g caster sugar",
+        "- 4 eggs",
+        "- 225 g self-raising flour",
+        "- Zest of 2 lemons",
+        "- For the drizzle: juice of 1½ lemons and 85 g sugar",
+        "## Method",
+        "Beat the butter and sugar until pale and fluffy, then add the eggs one at a time. Fold in the flour and lemon zest and spoon into a lined loaf tin.",
+        "While the cake is still warm, prick it all over with a skewer and pour over the lemon juice mixed with sugar. Leave it in the tin until completely cool."
+      ]
+    },
+    {
+      "path": "Documents/Work/Q4 planning.docx", "date": "2026-09-22T11:05",
+      "title": "Q4 planning",
+      "paragraphs": [
+        "Draft for the Lumen Studio check-in on 29 September.",
+        "## Goals",
+        "- Ship the three-step onboarding to all users by 15 November.",
+        "- Run a second usability round with 20 testers, including five screen-reader users.",
+        "- Replace the account-creation step with an optional sign-in later.",
+        "## Risks",
+        "The translation vendor needs final copy four weeks before release. If the copy slips past 10 October, Portuguese and Turkish ship in the following update.",
+        "## Budget",
+        "Twelve design days in October and eight in November, at the current day rate."
+      ]
+    }
+  ],
+  "xlsx": [
+    {
+      "path": "Documents/Travel/Trip budget 2025.xlsx", "date": "2025-08-20T21:40", "sheet": "Budget",
+      "rows": [
+        ["Trip", "Dates", "Travel", "Stay", "Food", "Activities", "Total"],
+        ["Norway", "7–11 Feb", 412, 960, 285, 140, "=SUM(C2:F2)"],
+        ["Cappadocia", "18–21 Apr", 538, 496, 160, 390, "=SUM(C3:F3)"],
+        ["Algarve", "10–17 Aug", 296, 840, 410, 120, "=SUM(C4:F4)"],
+        ["Total", "", "=SUM(C2:C4)", "=SUM(D2:D4)", "=SUM(E2:E4)", "=SUM(F2:F4)", "=SUM(G2:G4)"]
+      ]
+    },
+    {
+      "path": "Documents/Work/Expenses Q3 2026.xlsx", "date": "2026-10-02T10:15", "sheet": "Expenses",
+      "rows": [
+        ["Date", "Description", "Category", "Amount"],
+        ["2026-07-08", "Train to Cork, client workshop", "Travel", 46.8],
+        ["2026-07-08", "Lunch with Lumen Studio team", "Meals", 82.5],
+        ["2026-08-14", "Figma professional, annual", "Software", 144],
+        ["2026-09-03", "External monitor", "Equipment", 329],
+        ["2026-09-19", "Usability test incentives, 20 testers", "Research", 400],
+        ["", "Total", "", "=SUM(D2:D6)"]
+      ]
+    }
+  ],
+  "text": [
+    {
+      "path": "Documents/Travel/Packing list - Norway.md", "date": "2025-02-03T22:10",
+      "body": "# Packing list - Norway\n\n- Thermal base layers (2 sets)\n- Wool socks, hat, mittens\n- Down jacket and waterproof shell\n- Head torch and spare batteries\n- Tripod for the northern lights\n- Camera, charger, spare SD card\n- Ice grips for boots\n- Passport, driving licence, cabin arrival guide\n"
+    },
+    {
+      "path": "Documents/Work/Meeting notes 2026-09-14.md", "date": "2026-09-14T16:30",
+      "body": "# Lumen Studio - weekly sync, 14 September\n\nAttendees: Sam, Priya, Tomás\n\n## Decisions\n\n- Go ahead with the three-step onboarding.\n- Drop the separate welcome video; one illustrated screen instead.\n\n## Actions\n\n- Sam: final copy for the three screens by Friday.\n- Priya: recruit 20 testers for the second round.\n- Tomás: estimate the work to remove account creation.\n"
+    },
+    {
+      "path": "Documents/Home/Books to read.txt", "date": "2026-05-02T22:45",
+      "body": "Books to read\n\nThe Overstory - Richard Powers\nPiranesi - Susanna Clarke\nThe Dispossessed - Ursula K. Le Guin\nBraiding Sweetgrass - Robin Wall Kimmerer\nA Gentleman in Moscow - Amor Towles\n"
+    }
+  ]
+}

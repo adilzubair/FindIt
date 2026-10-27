@@ -4,6 +4,10 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- A new demo video in the README and on the website: four searches recorded live from the app on a generated demo drive (a moment in a video, photos, a sentence in a voice memo, a clause in a scanned contract). [`demo-video/`](demo-video/README.md) builds the drive, records the takes and edits them, so the video can be re-recorded when the interface changes ([credits](docs/media/CREDITS.md)).
+
 ## [0.1.0-preview.10] - 2026-10-27
 
 ### Added

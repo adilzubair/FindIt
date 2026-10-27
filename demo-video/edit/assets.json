@@ -1,0 +1,54 @@
+{
+  "comment": "Everything the edit needs that is not in the repository. Downloads are Mixkit items (Mixkit Stock Music / Sound Effects Free License), pinned by SHA-256; 'node prepare.mjs --update-lock' records new pins.",
+  "downloads": [
+    {
+      "file": "audio/music.mp3",
+      "url": "https://assets.mixkit.co/music/744/744.mp3",
+      "title": "House 02",
+      "artist": "Lily J",
+      "kind": "music",
+      "sha256": "5610ba37ab13f997f66c0a00ac1943b782d82f5c04ae1b171e40361ce8ef692f"
+    },
+    {
+      "file": "sfx/click.mp3",
+      "url": "https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3",
+      "title": "Cool interface click tone",
+      "kind": "sfx",
+      "sha256": "1b41ec99c2791eb1d292e0f1b09355a3cf0c184db42458d34cd041e249951e4b"
+    },
+    {
+      "file": "sfx/key.mp3",
+      "url": "https://assets.mixkit.co/active_storage/sfx/2541/2541-preview.mp3",
+      "title": "Single key press in a laptop",
+      "kind": "sfx",
+      "sha256": "2109eb97299c85c5972c9ebc1c54ae9acd5b19adefee0544fb35b99f375b31bf"
+    },
+    {
+      "file": "sfx/whoosh.mp3",
+      "url": "https://assets.mixkit.co/active_storage/sfx/1490/1490-preview.mp3",
+      "title": "Fast whoosh transition",
+      "kind": "sfx",
+      "sha256": "b88fd5d484251930efd6eca78c4340339908ea29d1e69bd24fb5191a10da4f78"
+    },
+    {
+      "file": "sfx/air.mp3",
+      "url": "https://assets.mixkit.co/active_storage/sfx/1489/1489-preview.mp3",
+      "title": "Air woosh",
+      "kind": "sfx",
+      "sha256": "8af9843a636d3b4961f0c8b3545a21e674bd43d59f97d5c38d3f9a3f04674fd2"
+    },
+    {
+      "file": "sfx/pop.mp3",
+      "url": "https://assets.mixkit.co/active_storage/sfx/3005/3005-preview.mp3",
+      "title": "Explainer video pops whoosh light pop",
+      "kind": "sfx",
+      "sha256": "966bc3f7f2d8c19570f8826562b987f4d701854c1b63b98aba2f2c86178022b0"
+    }
+  ],
+  "fromDrive": [
+    {
+      "src": "Voice memos/Recording 14.m4a",
+      "file": "audio/memo-14.m4a"
+    }
+  ]
+}

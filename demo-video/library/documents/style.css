@@ -1,0 +1,30 @@
+@page { size: A4; margin: 18mm 18mm 20mm; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font: 10.5pt/1.45 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #1d232b; margin: 0; }
+h1 { font-size: 20pt; font-weight: 600; margin: 0 0 4mm; letter-spacing: -0.2pt; }
+h2 { font-size: 12pt; font-weight: 600; margin: 7mm 0 2mm; }
+p { margin: 0 0 3mm; }
+small, .muted { color: #5d6875; }
+table { width: 100%; border-collapse: collapse; margin: 3mm 0 5mm; }
+th, td { text-align: left; padding: 2.2mm 2mm; border-bottom: 0.3mm solid #dfe3e8; vertical-align: top; }
+th { font-weight: 600; font-size: 9pt; color: #5d6875; text-transform: uppercase; letter-spacing: 0.4pt; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.brand { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 5mm; margin-bottom: 7mm; border-bottom: 0.6mm solid var(--accent, #1d232b); }
+.brand .name { font-size: 15pt; font-weight: 700; color: var(--accent, #1d232b); letter-spacing: -0.2pt; }
+.brand .meta { text-align: right; font-size: 9pt; color: #5d6875; line-height: 1.5; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm 10mm; margin: 4mm 0 6mm; }
+.grid div b { display: block; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.4pt; color: #5d6875; font-weight: 600; }
+.box { border: 0.3mm solid #dfe3e8; border-radius: 2mm; padding: 4mm 5mm; margin: 4mm 0; }
+.total { font-size: 13pt; font-weight: 700; }
+.foot { position: fixed; bottom: 0; left: 0; right: 0; font-size: 8pt; color: #8a94a0; border-top: 0.3mm solid #dfe3e8; padding-top: 2mm; }
+.page { page-break-after: always; }
+.page:last-child { page-break-after: auto; }
+.legal { font-family: "Times New Roman", Georgia, serif; font-size: 11.5pt; line-height: 1.55; }
+.legal h1 { font-family: inherit; text-align: center; font-size: 16pt; letter-spacing: 1pt; text-transform: uppercase; }
+.legal h2 { font-family: inherit; font-size: 11.5pt; text-transform: uppercase; letter-spacing: 0.4pt; }
+.legal .clause { margin: 0 0 3mm; text-align: justify; }
+.sign { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 14mm; }
+.sign .line { border-bottom: 0.3mm solid #1d232b; height: 14mm; font: 22pt "Segoe Script", "Ink Free", cursive; color: #1b2f6b; padding-left: 2mm; }
+.sign .who { font-size: 9.5pt; margin-top: 1.5mm; }
+.initials { position: fixed; bottom: 4mm; right: 0; font: 13pt "Segoe Script", "Ink Free", cursive; color: #1b2f6b; }
