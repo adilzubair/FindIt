@@ -12,7 +12,7 @@ body:
     attributes:
       label: FindIt version
       description: The text in FindIt/app/current.txt on the drive.
-      placeholder: 0.1.0-preview.9
+      placeholder: 0.1.0-preview.10
     validations:
       required: true
   - type: input
