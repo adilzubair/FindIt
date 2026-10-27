@@ -84,15 +84,19 @@
       <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{DynamicResource InkBrush}"/></Trigger><Trigger Property="IsChecked" Value="True"><Setter TargetName="Underline" Property="Visibility" Value="Visible"/><Setter Property="Foreground" Value="{DynamicResource InkBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
   </Style>
 
-  <!-- File tile: the outline sits on the thumbnail so captions stay quiet. -->
+  <!-- File tile: the outline sits on the thumbnail so captions stay quiet. The rings live in a box exactly
+       the thumbnail's size, so their negative margins grow them evenly on all four sides, and each corner
+       radius is the thumbnail's 6 plus its offset so the gaps stay even around the corners. -->
   <Style x:Key="ResultButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
       <Grid Background="Transparent">
         <ContentPresenter x:Name="Content" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-        <Border x:Name="Hover" IsHitTestVisible="False" Height="{Binding ThumbnailHeight, FallbackValue=132}" VerticalAlignment="Top" Background="{DynamicResource InkBrush}" Opacity="0" CornerRadius="6"/>
-        <Border x:Name="Outline" IsHitTestVisible="False" Height="{Binding ThumbnailHeight, FallbackValue=132}" VerticalAlignment="Top" BorderBrush="Transparent" BorderThickness="2" CornerRadius="7" Margin="-3"/>
-        <Border x:Name="KeyboardRing" IsHitTestVisible="False" Height="{Binding ThumbnailHeight, FallbackValue=132}" VerticalAlignment="Top" BorderBrush="{DynamicResource FocusBrush}" BorderThickness="2" CornerRadius="8" Margin="-4" Visibility="Collapsed"/>
+        <Grid IsHitTestVisible="False" Height="{Binding ThumbnailHeight, FallbackValue=132}" VerticalAlignment="Top">
+          <Border x:Name="Hover" Background="{DynamicResource InkBrush}" Opacity="0" CornerRadius="6"/>
+          <Border x:Name="Outline" BorderBrush="Transparent" BorderThickness="2" CornerRadius="9" Margin="-3"/>
+          <Border x:Name="KeyboardRing" BorderBrush="{DynamicResource FocusBrush}" BorderThickness="2" CornerRadius="11" Margin="-5" Visibility="Collapsed"/>
+        </Grid>
       </Grid>
       <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Hover" Property="Opacity" Value="0.06"/></Trigger><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/></DataTrigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="KeyboardRing" Property="Visibility" Value="Visible"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="Content" Property="Opacity" Value="0.42"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>

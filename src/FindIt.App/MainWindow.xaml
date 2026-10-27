@@ -58,9 +58,9 @@
 
     <DataTemplate x:Key="TileTemplate">
       <Button Style="{StaticResource ResultButton}" Loaded="TileLoaded" Unloaded="TileUnloaded" Click="ResultClick" Tag="{Binding}"
-              Width="{Binding TileWidth}" Margin="0,0,12,12" ToolTip="{Binding Result.RelativePath}" AutomationProperties.Name="{Binding AccessibleName}">
+              Width="{Binding TileWidth}" Margin="0,0,12,0" ToolTip="{Binding Result.RelativePath}" AutomationProperties.Name="{Binding AccessibleName}">
         <StackPanel>
-          <Border CornerRadius="6" Height="{Binding ThumbnailHeight}" ClipToBounds="True">
+          <Border CornerRadius="6" Height="{Binding ThumbnailHeight}" local:RoundedClip.Radius="6">
             <Border.Style>
               <Style TargetType="Border">
                 <Setter Property="Background" Value="{DynamicResource PreviewBrush}" />
@@ -179,7 +179,8 @@
         <TextBox x:Name="QueryBox" KeyDown="QueryKeyDown" Padding="34,0,64,0" MinHeight="32" FontSize="13" shell:WindowChrome.IsHitTestVisibleInChrome="True"
                  AutomationProperties.Name="Search this drive" ToolTip="Describe a photo, video moment, or file. Press Enter to search." />
         <TextBlock Text="&#xE721;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Left" Margin="12,0,0,0" IsHitTestVisible="False" />
-        <TextBlock x:Name="QueryPlaceholder" Text="Search this drive" Margin="35,0,64,0" FontSize="13" Foreground="{DynamicResource SubtleBrush}" IsHitTestVisible="False" VerticalAlignment="Center">
+        <!-- Starts where typed text does (padding, 1 px border, the text box's own 2 px inset), so the caret sits before the hint, not on it. -->
+        <TextBlock x:Name="QueryPlaceholder" Text="Search this drive" Margin="37,0,64,0" FontSize="13" Foreground="{DynamicResource SubtleBrush}" IsHitTestVisible="False" VerticalAlignment="Center">
           <TextBlock.Style>
             <Style TargetType="TextBlock">
               <Setter Property="Visibility" Value="Collapsed" />
@@ -296,7 +297,7 @@
                   <TextBox x:Name="HeroQueryBox" KeyDown="QueryKeyDown" FontSize="16" MinHeight="56" Padding="46,0,176,0" AutomationProperties.Name="Search this drive"
                            Text="{Binding Text, ElementName=QueryBox, UpdateSourceTrigger=PropertyChanged}" />
                   <TextBlock Text="&#xE721;" Style="{StaticResource Glyph}" FontSize="18" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Left" Margin="18,0,0,0" IsHitTestVisible="False" />
-                  <TextBlock Text="Try “dog playing on the grass” or words from a document" Margin="47,0,176,0" FontSize="16" Foreground="{DynamicResource SubtleBrush}" IsHitTestVisible="False" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                  <TextBlock x:Name="HeroPlaceholder" Text="Try “dog playing on the grass” or words from a document" Margin="49,0,176,0" FontSize="16" Foreground="{DynamicResource SubtleBrush}" IsHitTestVisible="False" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
                     <TextBlock.Style>
                       <Style TargetType="TextBlock">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -347,7 +348,7 @@
                         <Button Style="{StaticResource ResultButton}" Width="148" Margin="0,0,12,12" Loaded="TileLoaded" Unloaded="TileUnloaded" Click="RecentClick" Tag="{Binding}"
                                 ToolTip="{Binding Result.RelativePath}" AutomationProperties.Name="{Binding AccessibleName}">
                           <StackPanel>
-                            <Border CornerRadius="6" Height="{Binding ThumbnailHeight}" ClipToBounds="True" Background="{DynamicResource PreviewBrush}">
+                            <Border CornerRadius="6" Height="{Binding ThumbnailHeight}" local:RoundedClip.Radius="6" Background="{DynamicResource PreviewBrush}">
                               <Grid>
                                 <local:FindItIcon Kind="{Binding IconKind}" Width="32" Height="32" Visibility="{Binding PlaceholderVisibility}" />
                                 <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
@@ -560,12 +561,13 @@
                     <ColumnDefinition x:Name="PreviewColumn" Width="0" MinWidth="0" />
                   </Grid.ColumnDefinitions>
                   <Grid x:Name="LibraryResultsPanel">
-                    <local:RowGallery x:Name="Gallery" ScrollViewer.ScrollChanged="ResultsScrollChanged" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource RowContainer}" VirtualizingPanel.CacheLength="1,1"
-                                      ScrollViewer.VerticalScrollBarVisibility="Auto" SizeChanged="GallerySizeChanged" Style="{StaticResource {x:Type ListBox}}" Padding="4,4,0,0"
+                    <local:RowGallery x:Name="Gallery" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource RowContainer}" VirtualizingPanel.CacheLength="1,1"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto" SizeChanged="GallerySizeChanged" Style="{StaticResource {x:Type ListBox}}" Padding="0"
                                       AutomationProperties.Name="Files. Use arrow keys to move between files.">
                       <ListBox.ItemTemplate>
                         <DataTemplate>
-                          <local:PresentationItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
+                          <!-- The margin is GalleryInset: room for the rings drawn outside each thumbnail. -->
+                          <local:PresentationItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}" Margin="6,6,0,0">
                             <ItemsControl.ItemsPanel>
                               <ItemsPanelTemplate>
                                 <StackPanel Orientation="Horizontal" />
@@ -582,7 +584,7 @@
                     </local:RowGallery>
                     <Border x:Name="MetadataListFrame" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="4,0,4,4"
                             Visibility="{Binding Visibility, ElementName=MetadataList}">
-                      <ListView x:Name="MetadataList" ScrollViewer.ScrollChanged="ResultsScrollChanged" Visibility="Collapsed" ItemsSource="{Binding CurrentTiles}" SelectionChanged="ResultSelectionChanged" MouseDoubleClick="ListDoubleClick"
+                      <ListView x:Name="MetadataList" Visibility="Collapsed" ItemsSource="{Binding CurrentTiles}" SelectionChanged="ResultSelectionChanged" MouseDoubleClick="ListDoubleClick"
                                 BorderThickness="0" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <ListView.View>
                           <GridView>

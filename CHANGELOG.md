@@ -11,7 +11,14 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 ### Changed
 
+- Results are shown in pages of 200 thumbnails with **Previous** and **Next**, and the count says which page you are on. Scrolling to the end no longer appends more results.
 - A person's quick yes/no suggestions show one face per moment, instead of near-identical faces from neighbouring video frames.
+
+### Fixed
+
+- The selected file's outline is even on all four sides and follows the thumbnail's rounded corners; thumbnails themselves now have rounded corners, and the first row's outline is no longer cut off.
+- The search box hint starts where typed text does, so the blinking cursor no longer sits on its first letter.
+- **Large** thumbnails now always show fewer columns than **Medium**. In an ordinary-sized window both sizes used to give the same grid.
 
 ## [0.1.0-preview.9] - 2026-10-23
 

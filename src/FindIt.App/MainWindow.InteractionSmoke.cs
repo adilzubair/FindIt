@@ -91,10 +91,19 @@ public partial class MainWindow
             Check(label, FiltersPopup.IsOpen && popup.ActualWidth > 0 && popup.ActualHeight > 0 && popupBounds.Left >= surfaceBounds.Left - 2 && popupBounds.Top >= surfaceBounds.Top - 2 && popupBounds.Right <= surfaceBounds.Right + 2 && popupBounds.Bottom <= surfaceBounds.Bottom + 2,
                 new { surfaceBounds, popupBounds, FilterScroll.MaxHeight });
         }
+        // An empty box draws its caret where typed text starts. The hint must start there too, or the
+        // caret blinks on top of its first letter and typing shifts the text sideways.
+        void CheckPlaceholderAlignment(string label, TextBox box, FrameworkElement placeholder)
+        {
+            var host = (UIElement)System.Windows.Media.VisualTreeHelper.GetParent(box);
+            var caretX = box.TranslatePoint(box.GetRectFromCharacterIndex(0).TopLeft, host).X;
+            var hintX = placeholder.TranslatePoint(new Point(), host).X;
+            Check(label, box.Text.Length == 0 && placeholder.IsVisible && double.IsFinite(caretX) && Math.Abs(caretX - hintX) <= .75, new { caretX, hintX });
+        }
         void CheckContactSheetWidth(string label)
         {
             var viewport = VisualChildren<ScrollViewer>(Gallery).First().ViewportWidth;
-            var available = Math.Max(120, viewport - GalleryGap);
+            var available = Math.Max(120, viewport - GalleryGap - GalleryInset);
             var fullRows = _sheetRows.Take(Math.Max(0, _sheetRows.Count - 1)).ToArray();
             var geometryWidthMatches = fullRows.Length > 0 && fullRows.All(row => Math.Abs(row.Widths.Sum() + (row.Count - 1) * GalleryGap - available) <= 1);
             var uniformTiles = fullRows.All(row => row.Widths.All(width => Math.Abs(width - row.Widths[0]) <= 1.5));
@@ -107,15 +116,18 @@ public partial class MainWindow
             Width = 1400; Height = 900;
             await AttachBackendAsync(backend); _statusTimer.Stop(); await Idle();
             Check("small-file-sizes-use-readable-units", FormatBytes(123).Contains("123", StringComparison.Ordinal) && FormatBytes(123).EndsWith(" B", StringComparison.Ordinal) && FormatBytes(1024).EndsWith(" KB", StringComparison.Ordinal) && !FormatBytes(1024).StartsWith("0", StringComparison.Ordinal));
-            Check("initial-home-with-loaded-library", HomePage.IsVisible && !TitleSearchHost.IsVisible && SearchNav.IsChecked == true && CurrentTiles.Count == 256 && _people.Count == 40 && _searchGeneration == 42 && NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
+            Check("initial-home-with-loaded-library", HomePage.IsVisible && !TitleSearchHost.IsVisible && SearchNav.IsChecked == true && CurrentTiles.Count == PageSize && _people.Count == 40 && _searchGeneration == 42 && NextPageButton.IsEnabled && ResultCount.Text.Contains("650")
+                && backend.Requests.Last().RetrievalBudget == DefaultRetrievalBudget);
             Check("home-shows-recent-files-and-people", RecentTiles.Count == 12 && HomePeopleList.Items.Count == 8 && HomeLibrarySections.IsVisible && !HomeSetupCard.IsVisible && PhotoCount.Text.Contains("photo"),
                 new { recent = RecentTiles.Count, people = HomePeopleList.Items.Count, PhotoCount.Text });
+            CheckPlaceholderAlignment("hero-hint-starts-at-the-caret", HeroQueryBox, HeroPlaceholder);
             var requestsBeforeBrowse = backend.Requests.Count;
             await Click(BrowseNav);
             Check("browse-reuses-loaded-window", SearchPage.IsVisible && BrowseNav.IsChecked == true && FolderPane.IsVisible && SearchTitle.Text == "All files" && backend.Requests.Count == requestsBeforeBrowse && CurrentTiles.All(tile => tile.ReasonBadge is null));
             LayoutCheck("regular-library-layout", QueryBox, SearchHeadingRow, AllTab, AudioTab, FiltersButton, Gallery, PaginationBar, FolderPane);
             Check("icon-actions-have-accessible-names", new ButtonBase[] { EjectButton, GridViewButton, ListViewButton, FiltersButton, SearchNav, BrowseNav, PeopleNav, DriveNav, SettingsNav, MinimizeButton, MaximizeButton, CloseButton, DriveStatusButton, PreviewPreviousButton, PreviewNextButton }.All(button => !string.IsNullOrWhiteSpace(System.Windows.Automation.AutomationProperties.GetName(button))));
             Check("tabs-and-filters-do-not-overlap", Bounds(AudioTab).Right <= Bounds(FiltersButton).Left);
+            CheckPlaceholderAlignment("search-hint-starts-at-the-caret", QueryBox, QueryPlaceholder);
             QueryBox.Focus(); await Idle(); var focusedQueryHeight = QueryBox.ActualHeight;
             FiltersButton.Focus(); await Idle();
             Check("search-focus-does-not-shift-toolbar-height", Math.Abs(QueryBox.ActualHeight - focusedQueryHeight) <= .5, new { focusedQueryHeight, unfocusedQueryHeight = QueryBox.ActualHeight });
@@ -161,7 +173,7 @@ public partial class MainWindow
             Check("search-switches-to-results-mode", SearchTitle.Text.Contains("sample") && SearchNav.IsChecked == true && BrowseNav.IsChecked == false && !FolderPane.IsVisible && SuggestionPanel.Children.OfType<Button>().Any(b => Equals(b.Content, "sample")));
             QueryBox.Text = "unsent draft";
             ExactFilter.IsChecked = true; await Idle();
-            Check("filter-keeps-submitted-query", backend.Requests.Last().Query == "sample" && _submittedQuery == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == 256);
+            Check("filter-keeps-submitted-query", backend.Requests.Last().Query == "sample" && _submittedQuery == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == PageSize);
             await ClearExact();
             Check("removing-filter-keeps-submitted-query", backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft");
             var selectedBeforePage = CurrentTiles.First(tile => tile.Result.Kind == FileKind.Document);
@@ -170,20 +182,22 @@ public partial class MainWindow
             Check("failed-page-keeps-results-and-navigation", _page == 0 && CurrentTiles.First().Result.FileId == selectedBeforePage.Result.FileId && !PreviousPageButton.IsEnabled && NextPageButton.IsEnabled && _selectedResult?.FileId == selectedBeforePage.Result.FileId);
             await Click(NextPageButton);
             Check("successful-page-change-closes-stale-inspector", _selectedResult is null && !PreviewPanel.IsVisible && CurrentTiles.All(tile => !tile.IsSelected));
-            Check("paging-keeps-submitted-query-and-generation", _page == 1 && backend.Requests.Last().Query == "sample" && backend.Requests.Last().GenerationId == 42 && ResultCount.Text.Contains("257"));
+            Check("paging-keeps-submitted-query-and-generation", _page == 1 && backend.Requests.Last().Query == "sample" && backend.Requests.Last().GenerationId == 42 && ResultCount.Text.StartsWith("Page 2 · 201–400", StringComparison.Ordinal),
+                new { _page, count = ResultCount.Text });
             var pageRequests = backend.Requests.Count; await Click(PreviousPageButton);
-            Check("previous-page-validates-worker-session", _page == 0 && backend.Requests.Count == pageRequests + 1 && CurrentTiles.Count == 256 && backend.Requests.Last().Cursor == "0");
-            await Click(NextPageButton); await Click(NextPageButton);
-            Check("final-page-and-accurate-range", _page == 2 && CurrentTiles.Count == 138 && !NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
+            Check("previous-page-validates-worker-session", _page == 0 && backend.Requests.Count == pageRequests + 1 && CurrentTiles.Count == PageSize && backend.Requests.Last().Cursor == "0");
+            await Click(NextPageButton); await Click(NextPageButton); await Click(NextPageButton);
+            Check("final-page-and-accurate-range", _page == 3 && CurrentTiles.Count == 50 && !NextPageButton.IsEnabled && ResultCount.Text.Contains("601–650"),
+                new { _page, tiles = CurrentTiles.Count, count = ResultCount.Text });
             backend.RestartNextSearch = true; await Click(PreviousPageButton);
-            Check("expired-session-reruns-search-in-place", _page == 0 && _searchError is null && backend.Requests.Last().Cursor is null && backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == 256 && NoticeText.Text.Contains("refreshed", StringComparison.Ordinal),
+            Check("expired-session-reruns-search-on-the-requested-page", _page == 2 && _searchError is null && backend.Requests.Last().Cursor == "400" && backend.Requests.Last().Query == "sample" && QueryBox.Text == "unsent draft" && CurrentTiles.Count == PageSize && NoticeText.Text.Contains("refreshed", StringComparison.Ordinal),
                 new { _page, _searchError, cursor = backend.Requests.Last().Cursor, query = backend.Requests.Last().Query, tiles = CurrentTiles.Count, notice = NoticeText.Text });
             await Click(SearchMoreButton);
-            Check("deeper-search-starts-new-window", _page == 0 && backend.Requests.Last().Cursor is null && backend.Requests.Last().RetrievalBudget == 2048 && CurrentTiles.Count == 256);
-            var firstRow = Rows.FirstOrDefault(); await LoadMoreAsync(); await Idle();
-            Check("scrolling-appends-next-page-in-place", _firstPage == 0 && _page == 1 && CurrentTiles.Count == 512 && ReferenceEquals(Rows.FirstOrDefault(), firstRow) && ResultCount.Text.StartsWith("1–512", StringComparison.Ordinal) && backend.Requests.Last().RetrievalBudget == 2048 && PreviousPageButton.IsEnabled == false);
-            await LoadMoreAsync(); await Idle();
-            Check("appending-stops-at-the-last-page", _page == 2 && CurrentTiles.Count == 650 && !CanLoadMore && !NextPageButton.IsEnabled && ResultCount.Text.Contains("650"));
+            Check("deeper-search-starts-new-window", _page == 0 && backend.Requests.Last().Cursor is null && backend.Requests.Last().RetrievalBudget == 2048 && CurrentTiles.Count == PageSize);
+            var scrollRequests = backend.Requests.Count;
+            VisualChildren<ScrollViewer>(Gallery).First().ScrollToBottom(); await Idle(); await Task.Delay(100); await Idle();
+            Check("scrolling-to-the-end-keeps-one-page", _page == 0 && CurrentTiles.Count == PageSize && backend.Requests.Count == scrollRequests && NextPageButton.IsEnabled && !PreviousPageButton.IsEnabled,
+                new { _page, tiles = CurrentTiles.Count, requests = backend.Requests.Count - scrollRequests });
             foreach (bool dark in new[] { false, true })
             {
                 SetDarkTheme(dark); Width = 880; Height = 520; await Idle();
@@ -193,7 +207,7 @@ public partial class MainWindow
             SetDarkTheme(false); Width = 1400; Height = 900; await Idle();
             QueryBox.Clear(); SearchClick(this, new RoutedEventArgs()); await Idle();
 
-            var densities = new List<object>();
+            var densities = new List<object>(); var densityColumns = new List<int>();
             foreach (var index in new[] { 0, 1, 2 })
             {
                 DensitySelector.SelectedIndex = index; await Idle();
@@ -203,10 +217,12 @@ public partial class MainWindow
                     Math.Abs(CurrentTiles[geometry.Start + item].TileWidth - geometry.Widths[item]) <= .01 &&
                     Math.Abs(CurrentTiles[geometry.Start + item].ThumbnailHeight - geometry.ThumbnailHeight) <= .01));
                 Check("density-" + index, Rows.Count == _sheetRows.Count && _sheetRows.Count > 0 && _sheetRows.Sum(geometry => geometry.Count) == CurrentTiles.Count && geometryMatchesTiles && Math.Abs(actualExtent - _sheetRows[0].Extent) <= 1,
-                    new { _targetTileWidth, rowCount = Rows.Count, expectedExtent = _sheetRows.FirstOrDefault()?.Extent, actualExtent, geometryMatchesTiles });
+                    new { _thumbnailSize, rowCount = Rows.Count, expectedExtent = _sheetRows.FirstOrDefault()?.Extent, actualExtent, geometryMatchesTiles });
                 densities.Add(new { index, rowCount = _sheetRows.Count, firstRowCount = _sheetRows[0].Count, _sheetRows[0].ThumbnailHeight });
+                densityColumns.Add(_sheetRows[0].Count);
             }
-            Check("density-controls-reflow", densities.Count == 3);
+            // Every size changes the grid at this ordinary window width, Large included.
+            Check("density-controls-reflow", densities.Count == 3 && densityColumns[0] > densityColumns[1] && densityColumns[1] > densityColumns[2], new { densityColumns });
             DensitySelector.SelectedIndex = 1; await Idle();
             // A resize that keeps the column count resizes realized tiles in place.
             var columnsBefore = _columns; var rowBefore = Gallery.ItemContainerGenerator.ContainerFromIndex(0);
@@ -264,7 +280,7 @@ public partial class MainWindow
             var expectedDown = ContactSheetLayout.FindVerticalNeighbor(_sheetRows, CurrentTiles.IndexOf(nextFocusedTile!), 1);
             WindowKeyDown(this, KeyArgs(Key.Down)); await Idle();
             Check("gallery-down-follows-visible-column", ReferenceEquals((Keyboard.FocusedElement as Button)?.DataContext, CurrentTiles[expectedDown]));
-            // Reaching the end also appends the next page; End lands on the file that was last.
+            // End lands on the page's last file, even when its row is virtualized.
             var lastLoaded = CurrentTiles.Last();
             WindowKeyDown(this, KeyArgs(Key.End)); await Idle();
             Check("gallery-end-reaches-virtualized-last-file", ReferenceEquals((Keyboard.FocusedElement as Button)?.DataContext, lastLoaded));
@@ -399,7 +415,7 @@ public partial class MainWindow
             QueryBox.Text = "slow"; SearchClick(this, new RoutedEventArgs()); await backend.SlowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
             QueryBox.Text = "sample"; SearchClick(this, new RoutedEventArgs()); await Idle();
             await backend.SlowCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Check("stale-search-is-cancelled", backend.CancelledSearches == cancellationsBeforeSlow + 1 && _submittedQuery == "sample" && CurrentTiles.Count == 256 && CurrentTiles.All(t => t.Result.Name.Contains("Sample")),
+            Check("stale-search-is-cancelled", backend.CancelledSearches == cancellationsBeforeSlow + 1 && _submittedQuery == "sample" && CurrentTiles.Count == PageSize && CurrentTiles.All(t => t.Result.Name.Contains("Sample")),
                 new { cancellationsBeforeSlow, cancellationsAfterSlow = backend.CancelledSearches, slowRequestWasCancelled = backend.SlowCancelled.Task.IsCompletedSuccessfully, _submittedQuery, tileCount = CurrentTiles.Count, lastRequestQuery = backend.Requests.Last().Query });
             FiltersPopup.IsOpen = true; await Idle(); escape = KeyArgs(Key.Escape); WindowKeyDown(this, escape); await Idle();
             Check("escape-dismisses-filters", escape.Handled && !FiltersPopup.IsOpen);

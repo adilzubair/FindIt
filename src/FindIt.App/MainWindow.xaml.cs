@@ -56,6 +56,9 @@ public partial class MainWindow : Window
     private readonly List<string> _recentQueries = [];
     private string _previewPlainText = "";
     private const double GalleryGap = 12, GalleryCaption = 44;
+    // Each gallery row starts this far in (Margin on its items in MainWindow.xaml), so the selection and
+    // focus rings drawn outside a thumbnail stay inside the row; the scroll viewer clips its own padding.
+    private const double GalleryInset = 6;
 
     public MainWindow(IArchiveBackend? backend, string? rootPath = null)
     {
@@ -333,49 +336,40 @@ public partial class MainWindow : Window
 
     private SearchFilters ReadFilters() => _filters.ToSearchFilters(DateTimeOffset.Now, TimeZoneInfo.Local);
 
-    // Results arrive in pages of 256. Scrolling near the end appends the next page, up to
-    // AutoLoadedPages at once; Previous and Next then move past what is loaded.
-    private const int PageSize = 256, AutoLoadedPages = 16;
-    private int _firstPage;
-    private CancellationTokenSource? _appendCancellation;
-    private long _loadMoreFailedAt;
-    private bool CanLoadMore => !_searching && !_closing && _backend is not null && _page - _firstPage + 1 < AutoLoadedPages
-        && _pageCursors.Count > _page + 1 && (_loadMoreFailedAt == 0 || Stopwatch.GetElapsedTime(_loadMoreFailedAt) > TimeSpan.FromSeconds(5));
-    private async Task LoadMoreAsync() { if (CanLoadMore) await SearchAsync(false, append: true); }
-    private async void ResultsScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        // The list's column header has its own scroll viewer; only the outer one shows results.
-        if (sender is DependencyObject owner && e.OriginalSource is ScrollViewer scroll && ReferenceEquals(scroll, VisualChildren<ScrollViewer>(owner).FirstOrDefault()) && NearEnd(scroll)) await LoadMoreAsync();
-    }
+    // Results are shown one page at a time. Previous and Next replace the page, so the gallery
+    // never holds more than PageSize thumbnails.
+    private const int PageSize = 200;
+    // The worker ranks four times the page size by default. Asking for 1024 keeps the closest-match
+    // window the size it was with pages of 256, so smaller pages do not narrow semantic recall.
+    private const int DefaultRetrievalBudget = 1024;
 
-    private async Task SearchAsync(bool reset, int? targetPage = null, bool submitQuery = false, bool deepen = false, bool append = false, bool keepPreview = false)
+    private async Task SearchAsync(bool reset, int? targetPage = null, bool submitQuery = false, bool deepen = false, bool keepPreview = false)
     {
-        if (await SearchPageAsync(reset, targetPage, submitQuery, deepen, append, keepPreview, restartSilently: true) is int restoreCount and > 0)
+        if (await SearchPageAsync(reset, targetPage, submitQuery, deepen, keepPreview, restartSilently: true) is int restorePage and > 0)
         {
             // Preparation publishing new files, a people correction or an expired session
-            // invalidates the ranked window. Run the same search again, once, where the user was.
-            await SearchPageAsync(true, null, false, true, false, true, restartSilently: false);
-            while (CurrentTiles.Count > 0 && CurrentTiles.Count < restoreCount && CanLoadMore) await SearchPageAsync(false, null, false, false, true, true, restartSilently: false);
+            // invalidates the ranked window. Run the same search again, once, and return to the
+            // page the user asked for. Each page's cursor comes from the page before it.
+            await SearchPageAsync(true, null, false, true, true, restartSilently: false);
+            for (var page = 1; page < restorePage && _page == page - 1 && _pageCursors.Count > page; page++)
+                await SearchPageAsync(false, page, false, false, true, restartSilently: false);
             Notice("The library changed while you were searching, so the results were refreshed.", false);
         }
-        else if (!_closing) _ = Dispatcher.BeginInvoke(async () => { if (GalleryNeedsMore()) await LoadMoreAsync(); }, DispatcherPriority.Loaded);
     }
-    /// <returns>When the worker asked for a restart that should happen silently, how many results were shown.</returns>
-    private async Task<int> SearchPageAsync(bool reset, int? targetPage, bool submitQuery, bool deepen, bool append, bool keepPreview, bool restartSilently)
+    /// <returns>When the worker asked for a restart that should happen silently, the page that was asked for, counting from 1.</returns>
+    private async Task<int> SearchPageAsync(bool reset, int? targetPage, bool submitQuery, bool deepen, bool keepPreview, bool restartSilently)
     {
         if (_backend is null || _closing) return 0;
         CaptureFilterState();
         if (_filters.ValidateDateRange() is { } validation) { Notice(validation); return 0; }
         UpdateFilterUi();
-        CancellationTokenSource cancellation;
-        // An appended page must not cancel the thumbnails of the pages already shown.
-        if (append) cancellation = _appendCancellation = CancellationTokenSource.CreateLinkedTokenSource(_searchCancellation?.Token ?? CancellationToken.None);
-        else { _appendCancellation = null; _searchCancellation?.Cancel(); _searchCancellation?.Dispose(); cancellation = _searchCancellation = new(); }
+        _searchCancellation?.Cancel(); _searchCancellation?.Dispose();
+        var cancellation = _searchCancellation = new CancellationTokenSource();
         if (reset)
         {
             if (!deepen) _searchBudget = null;
             _boundedSearch = false;
-            _page = _firstPage = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null; _loadMoreFailedAt = 0;
+            _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null;
             if (!keepPreview) ClosePreview();
             if (submitQuery) _submittedQuery = QueryBox.Text.Trim();
             _submittedFilters = ReadFilters();
@@ -386,10 +380,10 @@ public partial class MainWindow : Window
             }
             UpdateSearchMode();
         }
-        var requestedPage = append ? _page + 1 : targetPage ?? _page;
+        var requestedPage = targetPage ?? _page;
         _searchError = null;
         _searching = true; SearchProgress.Visibility = Visibility.Visible;
-        if (!append) ResultCount.Text = "Searching…";
+        ResultCount.Text = "Searching…";
         PreviousPageButton.IsEnabled = NextPageButton.IsEnabled = false;
         SearchMoreButton.IsEnabled = false;
         if (CurrentTiles.Count == 0) UpdateEmptyState();
@@ -398,12 +392,12 @@ public partial class MainWindow : Window
             // Even a previously viewed page validates its worker session. Cached page
             // metadata must not bypass expiry, generation changes or people corrections.
             var response = await _backend.SearchAsync(new() { Query = _submittedQuery, Filters = _submittedFilters, Limit = PageSize,
-                Cursor = _pageCursors.ElementAtOrDefault(requestedPage), GenerationId = _searchGeneration, RetrievalBudget = _searchBudget }, cancellation.Token);
+                Cursor = _pageCursors.ElementAtOrDefault(requestedPage), GenerationId = _searchGeneration, RetrievalBudget = _searchBudget ?? DefaultRetrievalBudget }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (response.RestartRequired)
             {
-                if (restartSilently && response.GenerationId > 0) return Math.Max(CurrentTiles.Count, PageSize);
-                _page = _firstPage = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null;
+                if (restartSilently && response.GenerationId > 0) return requestedPage + 1;
+                _page = 0; _pageCursors.Clear(); _pageCursors.Add(null); _pages.Clear(); _pageLru.Clear(); _searchGeneration = null;
                 ClosePreview(); CurrentTiles.Clear(); Rows.Clear();
                 _searchError = string.IsNullOrWhiteSpace(response.Notice) ? "Run the search again." : response.Notice;
                 ResultCount.Text = "Search needs restarting"; Notice(_searchError);
@@ -417,30 +411,29 @@ public partial class MainWindow : Window
             _pages[requestedPage] = response;
             while (_pages.Count > 8 && _pageLru.TryDequeue(out var oldest)) _pages.Remove(oldest);
             if (response.NextCursor is not null && _pageCursors.Count == requestedPage + 1) _pageCursors.Add(response.NextCursor);
-            if (append) _page = requestedPage;
-            else
-            {
-                if (_page != requestedPage || _firstPage != requestedPage) ClosePreview();
-                _page = _firstPage = requestedPage;
-                CurrentTiles.Clear();
-            }
+            var pageChanged = _page != requestedPage;
+            if (pageChanged) ClosePreview();
+            _page = requestedPage;
+            CurrentTiles.Clear();
             foreach (var result in response.Results) CurrentTiles.Add(new ResultTile { Result = result, IsSelected = result.FileId == _selectedResult?.FileId });
             ArrangeRows(true);
-            if (!append && !keepPreview) GalleryScrollToTop();
+            if (!keepPreview || pageChanged) GalleryScrollToTop();
             if (_page == 0 && IsBrowsing && HasNoFilters)
             {
                 RecentTiles.Clear();
                 foreach (var result in response.Results.Take(12)) RecentTiles.Add(new ResultTile { Result = result, TileWidth = 148, ThumbnailHeight = 111 });
             }
             EmptyState.Visibility = CurrentTiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            var first = _firstPage * PageSize + 1; var last = _firstPage * PageSize + CurrentTiles.Count;
-            ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")}{(response.NextCursor is not null && response.TotalCount is null ? " · More results available" : "")}";
+            var first = _page * PageSize + 1; var last = _page * PageSize + CurrentTiles.Count;
+            var pageLabel = _page == 0 && response.NextCursor is null ? ""
+                : response.TotalCount is long pagedTotal ? $"Page {_page + 1:N0} of {Math.Max(1, (pagedTotal + PageSize - 1) / PageSize):N0} · " : $"Page {_page + 1:N0} · ";
+            ResultCount.Text = CurrentTiles.Count == 0 ? "No results" : $"{pageLabel}{first:N0}–{last:N0}{(response.TotalCount is long total ? $" of {total:N0}" : "")}{(response.NextCursor is not null && response.TotalCount is null ? " · More results available" : "")}";
             if (response.IsBoundedWindow) ResultCount.Text += " · Closest matches";
             UpdateSearchMode();
             SearchMoreButton.Visibility = response.CanSearchDeeper ? Visibility.Visible : Visibility.Collapsed;
             SearchMoreButton.IsEnabled = response.CanSearchDeeper;
             SearchMoreButton.Tag = response.RetrievalBudget;
-            PreviousPageButton.IsEnabled = _firstPage > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
+            PreviousPageButton.IsEnabled = _page > 0; NextPageButton.IsEnabled = response.NextCursor is not null;
             // Person evidence is qualified beside the results and in the preview, so the
             // worker's matching caveat is not repeated in the page-wide notice.
             _hasPersonEvidence = CurrentTiles.Any(t => t.Result.MatchCategory == MatchCategory.PossiblePersonAction || t.Result.Moments.Any(m => m.PersonEvidence.Count > 0));
@@ -461,34 +454,23 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    if (append) _loadMoreFailedAt = Stopwatch.GetTimestamp();
-                    PreviousPageButton.IsEnabled = _firstPage > 0;
+                    PreviousPageButton.IsEnabled = _page > 0;
                     NextPageButton.IsEnabled = _pages.TryGetValue(_page, out var visiblePage) && visiblePage.NextCursor is not null;
                     SearchMoreButton.IsEnabled = visiblePage?.CanSearchDeeper == true;
-                    if (!append) ResultCount.Text = $"Page {_page + 1:N0} · Could not load that page. Try again.";
+                    ResultCount.Text = $"Page {requestedPage + 1:N0} · Could not load that page. Try again.";
                 }
             }
         }
         finally
         {
-            if (append ? ReferenceEquals(cancellation, _appendCancellation) : ReferenceEquals(cancellation, _searchCancellation))
+            if (ReferenceEquals(cancellation, _searchCancellation))
             {
                 _searching = false; SearchProgress.Visibility = Visibility.Collapsed;
                 if (CurrentTiles.Count == 0) UpdateEmptyState();
             }
-            if (append) { if (ReferenceEquals(cancellation, _appendCancellation)) _appendCancellation = null; cancellation.Dispose(); }
         }
         return 0;
     }
-    // A tall window can show every loaded row without scrolling, so no scroll event asks for more.
-    private bool GalleryNeedsMore()
-    {
-        var scroll = VisualChildren<ScrollViewer>(_listMode ? MetadataList : Gallery).FirstOrDefault();
-        return scroll is not null && scroll.IsVisible && NearEnd(scroll);
-    }
-    // Within one and a half screens of the end. The gallery scrolls by pixels and the list by
-    // items, so the distance is measured in viewports; an unmeasured layout never counts.
-    private static bool NearEnd(ScrollViewer scroll) => scroll.ViewportHeight > 0 && scroll.ExtentHeight > 0 && scroll.ScrollableHeight - scroll.VerticalOffset <= scroll.ViewportHeight * 1.5;
 
     private async void TileLoaded(object sender, RoutedEventArgs e)
     {
