@@ -43,7 +43,7 @@ jobs:
           "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             .tools/downloads
@@ -51,7 +51,7 @@ jobs:
             runtime/tessdata
           key: deps-${{ runner.os }}-${{ hashFiles('scripts/Fetch-Dependencies.ps1', 'models/manifest.json') }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'NuGet.Config') }}
