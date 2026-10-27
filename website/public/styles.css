@@ -234,6 +234,18 @@ h1 { font-size: clamp(40px, 6.4vw, 72px); line-height: 1.04; }
 .missing { min-height: 100vh; display: grid; place-items: center; text-align: center; }
 .missing .sub { margin-bottom: 32px; }
 
+/* Credits */
+.credits { padding: calc(64px + clamp(56px, 8vw, 96px)) 0 clamp(72px, 9vw, 120px); }
+.credits__body { max-width: calc(760px + 2 * var(--gutter)); }
+.credits section { margin-top: clamp(48px, 6vw, 64px); }
+.credits h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+.credits p, .credits ul { margin-top: 12px; color: var(--ink-2); }
+.credits ul { padding-left: 1.2em; display: grid; gap: 8px; }
+.credits table { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; }
+.credits th { padding: 0 12px 8px 0; text-align: left; font-weight: 600; color: var(--muted); }
+.credits td { padding: 9px 12px 9px 0; border-top: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+.credits td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+
 /* Narrow screens */
 @media (max-width: 900px) {
   .peek { grid-template-columns: repeat(6, minmax(0, 1fr)); }
