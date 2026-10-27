@@ -27,5 +27,7 @@ models/*.traineddata
 .vscode/
 *.trx
 
-# Assembled website (node website/build.mjs)
+# Website build output and caches (see website/README.md)
 website/_site/
+website/node_modules/
+website/.cache/

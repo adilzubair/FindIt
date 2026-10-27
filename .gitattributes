@@ -7,3 +7,4 @@
 *.mp4 -text
 *.webp -text
 *.woff2 -text
+*.pdf -text

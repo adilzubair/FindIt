@@ -33,6 +33,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install the demo's runtime
+        working-directory: website
+        run: npm ci --ignore-scripts
+
+      # The demo model is about 90 MB and pinned to one revision, so it is fetched once and reused.
+      - uses: actions/cache@v4
+        with:
+          path: website/.cache/models
+          key: demo-model-${{ hashFiles('website/tools/models.mjs') }}
 
       - name: Assemble site
         env:

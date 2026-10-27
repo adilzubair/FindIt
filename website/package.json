@@ -1,0 +1,14 @@
+{
+  "name": "findit-website",
+  "private": true,
+  "type": "module",
+  "description": "Builds findit.muhamedadil.com. See README.md.",
+  "scripts": {
+    "build": "node build.mjs",
+    "index-samples": "node tools/index-samples.mjs"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "pdfjs-dist": "6.4.299"
+  }
+}

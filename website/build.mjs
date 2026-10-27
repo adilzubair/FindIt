@@ -1,16 +1,19 @@
-// Assembles the website into website/_site.
+// Assembles the website into website/_site. Run `npm ci` in website/ first.
 //
-//   node website/build.mjs            copy public/ plus the demo video and favicon
+//   node website/build.mjs            copy public/, the demo's runtime and model, the tour video and favicon
 //   node website/build.mjs --release  also point the download links at the newest published release
 //
-// The demo video and favicon are copied from where the repository already keeps them, so they are not duplicated.
+// The tour video and favicon are copied from where the repository already keeps them, so they are not duplicated.
+// The model is fetched once into website/.cache and served from the site, so visitors never contact another origin.
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MODEL, ensureModel } from './tools/models.mjs';
 
 const site = dirname(fileURLToPath(import.meta.url));
 const root = join(site, '..');
 const out = join(site, '_site');
+const modules = join(site, 'node_modules');
 const repository = process.env.GITHUB_REPOSITORY ?? 'adilzubair/FindIt';
 
 await rm(out, { recursive: true, force: true });
@@ -18,6 +21,17 @@ await cp(join(site, 'public'), out, { recursive: true });
 await mkdir(join(out, 'media'), { recursive: true });
 await cp(join(root, 'docs/media/findit-demo.mp4'), join(out, 'media/findit-demo.mp4'));
 await cp(join(root, 'src/FindIt.App/Assets/FindIt.ico'), join(out, 'favicon.ico'));
+
+// The in-browser demo: Transformers.js with its WebAssembly runtime, PDF.js, and the model files.
+const vendor = {
+  '@huggingface/transformers/dist/transformers.min.js': 'transformers.min.js',
+  'onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs': 'ort-wasm-simd-threaded.asyncify.mjs',
+  'onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm': 'ort-wasm-simd-threaded.asyncify.wasm',
+  'pdfjs-dist/build/pdf.min.mjs': 'pdf.min.mjs',
+  'pdfjs-dist/build/pdf.worker.min.mjs': 'pdf.worker.min.mjs',
+};
+for (const [from, to] of Object.entries(vendor)) await cp(join(modules, from), join(out, 'vendor', to));
+await cp(await ensureModel(), join(out, 'models', MODEL.id), { recursive: true });
 
 if (process.argv.includes('--release')) {
   const release = await latestRelease();
