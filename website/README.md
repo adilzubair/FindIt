@@ -70,6 +70,7 @@ GitHub Pages is free for public repositories. Its published soft limit is 100 GB
 ## Credits
 
 - Sample drive: travel photos from [COCO 2017](https://cocodataset.org/), each under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) by its Flickr author and chosen to show no people. The three videos are slow pushes over further photos from the same set. The documents are fictional. Every image is listed in [samples/CREDITS.md](public/samples/CREDITS.md).
+- Feature photos: [Porto at dusk, below the Dom Luís I bridge](https://commons.wikimedia.org/wiki/File:Puente_de_Don_Luis_I,_Oporto,_Portugal,_2019-06-02,_DD_29-31_HDR.jpg) by Diego Delso and [Porto trams](https://commons.wikimedia.org/wiki/File:Tranv%C3%ADas_no_Porto.jpg) by Bene Riobó, both under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) and cropped. They are served as `media/feature-photo.webp` and `media/feature-video.webp`, under the same licence.
 - Model: [MobileCLIP-S0](https://huggingface.co/Xenova/mobileclip_s0) by Apple, under the Apple sample code licence served next to it as `models/mobileclip_s0/LICENSE`.
 - Runtime: [Transformers.js](https://github.com/huggingface/transformers.js) and [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (Apache-2.0 and MIT). The indexer also uses [PDF.js](https://github.com/mozilla/pdf.js) (Apache-2.0).
 - The tour video and the Drive-page screenshot show the real FindIt app on its own demo library; see [demo media credits](../docs/media/CREDITS.md).
