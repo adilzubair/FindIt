@@ -1,8 +1,7 @@
-// A searchable drive: a wall of anonymous files that rearranges itself around what you ask for.
+// A searchable drive: one search box, and only the files that match it.
 import { clock, search, words } from './shared.js';
 import { embedQuery, ready } from './engine.js';
 
-const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const el = (tag, className, text) => Object.assign(document.createElement(tag), className ? { className } : {}, text !== undefined ? { textContent: text } : {});
 
 const REASON = {
@@ -13,6 +12,8 @@ const REASON = {
   name: 'In the name',
 };
 
+const reasonText = (hit, reason) => (reason === 'moment' ? `${clock(hit.moment.start)}–${clock(hit.moment.end)}` : REASON[reason]);
+
 export const describe = (files) => {
   const count = (kind) => files.filter((f) => f.kind === kind).length;
   const parts = [['photo', 'photo'], ['video', 'video'], ['document', 'document']]
@@ -21,13 +22,12 @@ export const describe = (files) => {
   return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] ?? 'no files';
 };
 
-// Renders the visible part of a document with its matched words or passage marked.
+// Renders the visible part of a document, starting at its first match, with the match marked.
 export function paperText(target, text, { places = [], chunk = null } = {}, around = 260) {
   target.replaceChildren();
   let ranges = places;
   if (!ranges.length && chunk) ranges = [[chunk.start, chunk.end]];
   const focus = ranges[0]?.[0] ?? 0;
-  // Start at the line holding the first match; long previews keep a little context above it.
   const from = Math.max(0, text.lastIndexOf('\n', Math.max(0, focus - (around > 400 ? 120 : 1))) + 1);
   const to = Math.min(text.length, from + around);
   let cursor = from;
@@ -42,25 +42,32 @@ export function paperText(target, text, { places = [], chunk = null } = {}, arou
   if (to < text.length) target.append('…');
 }
 
+// A video still: sample videos use one prepared strip, visitors' videos keep a small image per still.
+function frameStyle(target, file, index) {
+  if (file.strip) {
+    target.style.backgroundImage = `url("${file.strip}")`;
+    target.style.backgroundSize = `${file.frames.length * 100}% 100%`;
+    target.style.backgroundPosition = `${file.frames.length > 1 ? (index / (file.frames.length - 1)) * 100 : 0}% 0`;
+  } else {
+    target.style.backgroundImage = `url("${file.frames[index].thumb}")`;
+    target.style.backgroundSize = 'cover';
+  }
+}
+
 export class Drive {
-  constructor(root, { library, label, viewer, suggestions = [], idle }) {
+  constructor(root, { library, viewer, suggestions = [], idle }) {
     this.root = root;
-    this.library = library;
-    this.label = label;
     this.viewer = viewer;
-    this.idle = idle;
     this.form = root.querySelector('.seek');
     this.input = root.querySelector('.seek input');
     this.readout = root.querySelector('.readout');
-    this.meter = root.querySelector('.meter');
-    this.wall = root.querySelector('.wall');
+    this.results = root.querySelector('.results');
+    this.peek = root.querySelector('.peek');
     this.hints = root.querySelector('.hints');
-    this.tiles = new Map();
     this.query = '';
 
     this.renderHints(suggestions);
-    this.renderTiles();
-    this.reset();
+    this.update({ library, idle });
 
     this.form.addEventListener('submit', (event) => { event.preventDefault(); this.run(this.input.value); });
     let typing;
@@ -70,25 +77,20 @@ export class Drive {
       // Search as you type once the model is here; before that, wait for Enter so nothing downloads by accident.
       if (ready.text || this.library.queries?.[this.input.value.trim()]) typing = window.setTimeout(() => this.run(this.input.value), 260);
     });
-    this.wall.addEventListener('pointermove', (event) => {
-      const box = this.wall.getBoundingClientRect();
-      this.wall.style.setProperty('--x', `${event.clientX - box.left}px`);
-      this.wall.style.setProperty('--y', `${event.clientY - box.top}px`);
-    });
   }
 
-  // Swaps in a new set of files, for example after the visitor adds more.
+  // Swaps in a set of files, for example after the visitor adds more.
   update({ library, idle }) {
     this.library = library;
     this.idle = idle;
     this.input.value = '';
-    this.renderTiles();
+    this.renderPeek();
     this.reset();
   }
 
   renderHints(suggestions) {
     if (!this.hints) return;
-    this.hints.replaceChildren(el('span', 'hints__label', 'Try'));
+    this.hints.replaceChildren();
     for (const text of suggestions) {
       const button = el('button', 'hint', text);
       button.type = 'button';
@@ -97,70 +99,30 @@ export class Drive {
     }
   }
 
-  renderTiles() {
-    this.wall.replaceChildren();
-    this.tiles.clear();
-    this.library.files.forEach((file, index) => {
-      const tile = el('li', `tile tile--${file.kind}`);
-      tile.style.setProperty('--n', index);
-      const open = el('button', 'tile__open');
-      open.type = 'button';
-      open.setAttribute('aria-label', `Open ${file.name}`);
-      const media = el('span', 'tile__media');
-      if (file.kind === 'photo') {
-        const img = el('img');
-        Object.assign(img, { src: file.src, alt: '', loading: 'lazy', decoding: 'async' });
-        media.append(img);
-      } else if (file.kind === 'video') {
-        const frame = el('span', 'tile__frame');
-        this.showFrame(frame, file, 0);
-        media.append(frame, el('span', 'tile__badge', clock(file.duration)), el('span', 'tile__play'));
-      } else {
-        const paper = el('span', 'paper');
-        paper.append(el('span', 'paper__ext', file.extension.toUpperCase()), el('span', 'paper__text'));
-        paperText(paper.lastChild, file.text, {}, 180);
-        media.append(paper);
-      }
-      const why = el('span', 'tile__why');
-      open.append(media, el('span', 'tile__name', file.name), why);
-      open.addEventListener('click', () => this.viewer.open(file, this.hits?.get(file) ?? null, this.query));
-      tile.append(open);
-      this.wall.append(tile);
-      this.tiles.set(file, { tile, why, media });
-    });
-  }
-
-  showFrame(target, file, index) {
-    if (file.strip) {
-      target.style.backgroundImage = `url("${file.strip}")`;
-      target.style.backgroundSize = `${file.frames.length * 100}% 100%`;
-      target.style.backgroundPosition = `${file.frames.length > 1 ? (index / (file.frames.length - 1)) * 100 : 0}% 0`;
-    } else {
-      target.style.backgroundImage = `url("${file.frames[index].thumb}")`;
-      target.style.backgroundSize = 'cover';
-    }
+  // Before a search: a quiet row of what is on the drive, under the names a computer sees.
+  renderPeek() {
+    if (!this.peek) return;
+    this.peek.replaceChildren(...this.library.files.filter((f) => f.kind !== 'document').slice(0, 9).map((file) => {
+      const item = el('li', 'peek__item');
+      const media = el('span', 'peek__media');
+      if (file.kind === 'photo') media.append(Object.assign(el('img'), { src: file.src, alt: '', loading: 'lazy', decoding: 'async' }));
+      else frameStyle(media, file, 0);
+      item.append(media, el('span', 'peek__name', file.name));
+      return item;
+    }));
   }
 
   reset() {
     this.query = '';
-    this.hits = null;
-    this.root.classList.remove('has-results', 'has-none');
-    this.root.classList.add('is-idle');
-    this.flip(() => {
-      for (const [file, { tile, why, media }] of this.tiles) {
-        tile.classList.remove('is-hit', 'is-miss', 'is-lead');
-        tile.style.order = '';
-        why.textContent = '';
-        if (file.kind === 'video') this.showFrame(media.firstChild, file, 0);
-        if (file.kind === 'document') paperText(media.querySelector('.paper__text'), file.text, {}, 180);
-      }
-    });
-    this.setReadout(this.idle);
+    this.root.classList.remove('has-results');
+    this.results.replaceChildren();
+    if (this.peek) this.peek.hidden = false;
+    this.setReadout([this.idle]);
     this.hints?.querySelectorAll('.hint').forEach((b) => b.setAttribute('aria-pressed', 'false'));
   }
 
   setReadout(parts) {
-    this.readout.replaceChildren(...parts.map((part) => (typeof part === 'string' ? part : el(part.tag ?? 'strong', part.className ?? '', part.text))));
+    this.readout.replaceChildren(...parts.map((part) => (typeof part === 'string' ? part : el('strong', '', part.text))));
   }
 
   async run(raw) {
@@ -172,14 +134,13 @@ export class Drive {
     let vectors = this.library.queries?.[query];
     let understood = null;
     if (!vectors) {
-      if (!ready.text) this.setReadout([{ text: 'Fetching the search model' }, ' from this site, once. About 43 MB, then it stays in your browser.']);
+      if (!ready.text) this.setReadout(['Fetching the search model from this site. This happens once.']);
       this.root.classList.add('is-thinking');
       const started = performance.now();
       try {
         vectors = await embedQuery(query);
       } catch (error) {
-        this.root.classList.remove('is-thinking');
-        this.setReadout([{ text: 'The search model could not load.' }, ` Exact words still work. (${error.message})`]);
+        console.warn(error);
         vectors = {};
       }
       understood = performance.now() - started;
@@ -189,64 +150,50 @@ export class Drive {
 
     const started = performance.now();
     const results = search(this.library, query, vectors);
-    const elapsed = performance.now() - started;
-    this.show(results, { elapsed, understood });
+    this.show(results, performance.now() - started, understood);
   }
 
-  show(results, { elapsed, understood }) {
-    this.hits = new Map(results.map((hit) => [hit.file, hit]));
-    this.root.classList.remove('is-idle');
+  show(results, elapsed, understood) {
     this.root.classList.toggle('has-results', results.length > 0);
-    this.root.classList.toggle('has-none', results.length === 0);
-
-    this.flip(() => {
-      const rest = results.length;
-      this.library.files.forEach((file, index) => {
-        const { tile, why, media } = this.tiles.get(file);
-        const hit = this.hits.get(file);
-        tile.classList.toggle('is-hit', Boolean(hit));
-        tile.classList.toggle('is-miss', !hit);
-        tile.classList.toggle('is-lead', hit === results[0] && results.length > 2);
-        tile.style.order = hit ? results.indexOf(hit) : rest + index;
-        why.replaceChildren();
-        if (!hit) return;
-        why.append(el('span', '', hit.reasons.map((r) => (r === 'moment' ? `${REASON.moment} ${clock(hit.moment.start)}–${clock(hit.moment.end)}` : REASON[r])).join(' · ')));
-        if (file.kind === 'video' && hit.moment) this.showFrame(media.firstChild, file, hit.moment.frame);
-        if (file.kind === 'document') paperText(media.querySelector('.paper__text'), file.text, { places: hit.places ?? [], chunk: hit.chunk && hit.reasons.includes('meaning') ? hit.chunk : null }, tile.classList.contains('is-lead') ? 480 : 180);
-      });
-    });
+    if (this.peek) this.peek.hidden = true;
+    this.results.replaceChildren(...results.map((hit, index) => this.card(hit, index)));
 
     const total = this.library.files.length;
-    const timing = `${elapsed < 1 ? '<1' : Math.round(elapsed)} ms`;
+    const time = `${elapsed < 1 ? 'under 1' : Math.round(elapsed)} ms`;
     if (!results.length) {
-      this.setReadout([{ text: 'Nothing close enough.' }, ` Searched ${total} files in ${timing}. Try describing it differently.`]);
+      this.setReadout([{ text: 'Nothing close enough.' }, ' Try describing it another way.']);
       return;
     }
-    const lead = [{ text: `${results.length} match${results.length === 1 ? '' : 'es'}` }, ` for “${this.query}”. Searched ${total} files in ${timing}, on this device`];
-    if (understood !== null) lead.push(`, after ${Math.round(understood)} ms understanding your words`);
-    lead.push('.');
-    this.setReadout(lead);
+    const thought = understood === null ? '' : ` Understanding your words took ${Math.round(understood)} ms.`;
+    this.setReadout([{ text: `${results.length} of ${total} files` }, ` · searched in ${time}, on this device.${thought}`]);
   }
 
-  // Moves tiles to their new places smoothly: measure, change, then animate from the old positions.
-  flip(change) {
-    if (reduceMotion || !this.wall.isConnected) { change(); return; }
-    const before = new Map([...this.tiles.values()].map(({ tile }) => [tile, tile.getBoundingClientRect()]));
-    change();
-    const visible = (r) => r.bottom > -200 && r.top < innerHeight + 200;
-    for (const [tile, first] of before) {
-      const last = tile.getBoundingClientRect();
-      if (!visible(first) && !visible(last)) continue;
-      const dx = first.left - last.left;
-      const dy = first.top - last.top;
-      const sx = first.width / last.width;
-      const sy = first.height / last.height;
-      if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < 0.01) continue;
-      tile.animate(
-        [{ transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` }, { transform: 'none' }],
-        { duration: 620, easing: 'cubic-bezier(.2,.75,.2,1)', delay: tile.classList.contains('is-hit') ? Number(tile.style.order) * 28 : 0, fill: 'backwards' },
-      );
+  card(hit, index) {
+    const { file } = hit;
+    const item = el('li', `card card--${file.kind}`);
+    item.style.setProperty('--i', index);
+    const open = el('button', 'card__open');
+    open.type = 'button';
+    const media = el('span', 'card__media');
+    if (file.kind === 'photo') {
+      media.append(Object.assign(el('img'), { src: file.src, alt: '', decoding: 'async' }));
+    } else if (file.kind === 'video') {
+      const frame = el('span', 'card__frame');
+      frameStyle(frame, file, hit.moment?.frame ?? 0);
+      media.append(frame);
+      if (hit.moment) media.append(el('span', 'card__time', `${clock(hit.moment.start)}–${clock(hit.moment.end)}`));
+    } else {
+      const paper = el('span', 'card__paper');
+      paperText(paper, file.text, { places: hit.places ?? [], chunk: hit.reasons.includes('meaning') ? hit.chunk : null }, 220);
+      media.append(paper);
     }
+    const body = el('span', 'card__body');
+    body.append(el('span', 'card__name', file.name), el('span', 'card__why', hit.reasons.map((r) => (r === 'moment' ? 'Matching moment' : REASON[r])).join(' · ')));
+    open.append(media, body);
+    open.setAttribute('aria-label', `${file.name}: ${hit.reasons.map((r) => reasonText(hit, r)).join(', ')}`);
+    open.addEventListener('click', () => this.viewer.open(file, hit, this.query));
+    item.append(open);
+    return item;
   }
 }
 
@@ -273,9 +220,7 @@ export class Viewer {
     this.original.hidden = file.kind !== 'document';
 
     if (file.kind === 'photo') {
-      const img = el('img');
-      Object.assign(img, { src: file.src, alt: file.name });
-      this.media.append(img);
+      this.media.append(Object.assign(el('img'), { src: file.src, alt: file.name }));
     } else if (file.kind === 'video') {
       const video = el('video');
       Object.assign(video, { src: file.src, controls: true, playsInline: true, muted: true, preload: 'auto' });
@@ -294,21 +239,17 @@ export class Viewer {
       this.media.append(video, strip);
       if (hit?.moment) video.play().catch(() => {});
     } else {
-      const paper = el('div', 'paper paper--full');
-      const body = el('div', 'paper__text');
-      paperText(body, file.text, { places: hit?.places ?? [], chunk: hit?.reasons.includes('meaning') ? hit.chunk : null }, 1400);
-      paper.append(el('span', 'paper__ext', file.extension.toUpperCase()), body);
+      const paper = el('div', 'viewer__paper');
+      paperText(paper, file.text, { places: hit?.places ?? [], chunk: hit?.reasons.includes('meaning') ? hit.chunk : null }, 1400);
       this.media.append(paper);
     }
 
-    const reasons = hit?.reasons ?? [];
-    if (!reasons.length) this.why.append(el('li', '', 'Not a match for the current search. Open it any time from the drive.'));
-    for (const reason of reasons) {
+    for (const reason of hit?.reasons ?? []) {
       const item = el('li');
-      item.append(el('strong', '', reason === 'moment' ? `Moment ${clock(hit.moment.start)}–${clock(hit.moment.end)}` : REASON[reason]));
+      item.append(el('strong', '', reason === 'moment' ? `Moment ${reasonText(hit, reason)}` : REASON[reason]));
       const say = {
         looks: 'Found by what is in the picture. The filename says nothing about it.',
-        moment: `Found in the stills taken once a second. The video opens at ${clock(hit.moment?.start ?? 0)}.`,
+        moment: `Found in stills taken once a second. The video opens at ${clock(hit.moment?.start ?? 0)}.`,
         words: `“${words(query).join(' ')}” appears ${hit.places?.length} time${hit.places?.length === 1 ? '' : 's'}, highlighted.`,
         meaning: 'This passage means what you asked, even where the words differ.',
         name: 'The filename contains your words.',
@@ -319,4 +260,3 @@ export class Viewer {
     this.dialog.showModal();
   }
 }
-

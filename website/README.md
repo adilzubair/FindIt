@@ -2,7 +2,7 @@
 
 The public site at [findit.muhamedadil.com](https://findit.muhamedadil.com/). It is plain HTML, CSS and JavaScript modules, with no framework and no server.
 
-The page opens on a working search. A sample drive of 37 files with meaningless names sits dim on a dark wall; asking for something brings the matches forward, lit, each one saying why it matched. Visitors can then drop their own files and search those too. Everything runs in the visitor's browser: files are never uploaded, and the page loads nothing from other origins.
+The design is deliberately quiet: white space, system fonts (Segoe UI Variable on Windows, SF Pro on Apple devices), the app's blue, and one line of text per section. The page opens on a working search over a sample drive of 37 files with meaningless names. Only the matches appear, each saying why it matched. Visitors can then drop their own files and search those too. Everything runs in the visitor's browser: files are never uploaded, and the page loads nothing from other origins.
 
 ## How the demo works
 
@@ -11,7 +11,7 @@ The page opens on a working search. A sample drive of 37 files with meaningless 
 | `public/demo/shared.js` | Search logic shared with the indexing tool: chunking, exact-word matching, scoring and match cut-offs |
 | `public/demo/worker.js` | Runs [MobileCLIP-S0](https://github.com/apple/ml-mobileclip) with [Transformers.js](https://github.com/huggingface/transformers.js) in a Web Worker: WebGPU for images when available, otherwise WebAssembly |
 | `public/demo/engine.js` | Loads the prepared sample drive and prepares visitors' files: photos, one still per second of video, PDF text through [PDF.js](https://mozilla.github.io/pdf.js/), and plain-text files |
-| `public/demo/drive.js` | The wall of files, the search box and the file viewer |
+| `public/demo/drive.js` | The search box, result cards and file viewer |
 | `public/samples/` | The sample drive and its prepared `index.json` |
 
 Pictures and video stills are compared with the query through the image–text model. Documents are split into passages and compared with the query through the same model's text encoder, alongside exact-word matching. Suggested searches are embedded ahead of time, so they answer instantly. A typed search fetches the 43 MB text model on first use, and adding your own photos or videos also fetches the 46 MB image model. The WebAssembly runtime adds 27 MB. Browsers cache all of it.
@@ -63,7 +63,8 @@ GitHub Pages is free for public repositories. Its published soft limit is 100 GB
 
 ## Principles
 
-- Nothing is loaded from other origins. Fonts, code and the model are served from this site, and there are no analytics or cookies. The footer says so, and it should stay true.
+- Nothing is loaded from other origins. Code and the model are served from this site, text uses system fonts, and there are no analytics or cookies. The footer says so, and it should stay true.
+- Keep it short. Each section has a heading and at most one line beneath it; detail lives in the repository docs.
 - Visitors' files stay in the tab. They are read through object URLs and forgotten when the tab closes or the visitor chooses **Forget these files**.
 - Claims match [validation status](../docs/validation.md). Update the Status section when a release gate is passed.
 
@@ -72,5 +73,4 @@ GitHub Pages is free for public repositories. Its published soft limit is 100 GB
 - Sample photos: [COCO 2017](https://cocodataset.org/) validation images, each under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) by its Flickr author; the full list is in [demo media credits](../docs/media/CREDITS.md). The three sample videos are slow pushes over some of the same photos. The documents are fictional.
 - Model: [MobileCLIP-S0](https://huggingface.co/Xenova/mobileclip_s0) by Apple, under the Apple sample code licence served next to it as `models/mobileclip_s0/LICENSE`.
 - Runtime: [Transformers.js](https://github.com/huggingface/transformers.js) and [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (Apache-2.0 and MIT), [PDF.js](https://github.com/mozilla/pdf.js) (Apache-2.0).
-- Fonts: [Newsreader](https://github.com/productiontype/Newsreader), [IBM Plex Sans and Mono](https://github.com/IBM/plex), under the SIL Open Font License (texts in `public/fonts/`).
 - The tour video and app screenshot show the real FindIt app; see [demo media credits](../docs/media/CREDITS.md).

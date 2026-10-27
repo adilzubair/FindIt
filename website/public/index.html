@@ -4,340 +4,184 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FindIt — search your drive the way you remember</title>
-  <meta name="description" content="FindIt puts a private search engine on your external drive. Try it here on a sample drive or your own files: the search runs in your browser and nothing is uploaded.">
+  <meta name="description" content="FindIt puts a private search engine on your external drive. Find photos, videos and documents by what's in them, offline. Try it in your browser.">
   <meta name="findit-version" content="0.1.0-preview.9">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0b0c0e">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#ffffff">
   <link rel="canonical" href="https://findit.muhamedadil.com/">
   <link rel="icon" href="favicon.ico" sizes="any">
   <link rel="icon" href="media/findit-icon.png" type="image/png">
   <meta property="og:type" content="website">
   <meta property="og:title" content="FindIt — search your drive the way you remember">
-  <meta property="og:description" content="Offline search for photos, videos, audio and documents, carried on the drive itself. Try it in your browser.">
+  <meta property="og:description" content="Offline search for photos, videos and documents, carried on the drive itself. Try it in your browser.">
   <meta property="og:url" content="https://findit.muhamedadil.com/">
   <meta property="og:image" content="https://findit.muhamedadil.com/media/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="preload" href="fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="fonts/plex-sans-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="modulepreload" href="demo/drive.js">
   <link rel="stylesheet" href="styles.css">
-  <script>document.documentElement.classList.add('js')</script>
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
-
   <header class="bar">
     <div class="wrap bar__row">
-      <a class="brand" href="#top" aria-label="FindIt home">
-        <img src="media/findit-icon.png" alt="" width="26" height="26">
-        <span>FindIt</span>
-      </a>
-      <nav class="nav" aria-label="Main">
-        <ul class="nav__links">
-          <li><a href="#top">Try it</a></li>
-          <li><a href="#yours">Your files</a></li>
-          <li><a href="#drive">How it works</a></li>
-          <li><a href="#promises">Promises</a></li>
-          <li><a href="https://github.com/adilzubair/FindIt">GitHub</a></li>
-        </ul>
-        <details class="nav__menu">
-          <summary aria-label="Menu"><span></span><span></span></summary>
-          <ul>
-            <li><a href="#top">Try it</a></li>
-            <li><a href="#yours">Your files</a></li>
-            <li><a href="#drive">How it works</a></li>
-            <li><a href="#promises">Promises</a></li>
-            <li><a href="#status">Status</a></li>
-            <li><a href="https://github.com/adilzubair/FindIt">GitHub</a></li>
-          </ul>
-        </details>
-        <a class="button button--small" href="#get">Download</a>
+      <a class="brand" href="#top" aria-label="FindIt home"><img src="media/findit-icon.png" alt="" width="24" height="24"><span>FindIt</span></a>
+      <nav class="bar__nav" aria-label="Main">
+        <a href="#yours">Try your files</a>
+        <a href="https://github.com/adilzubair/FindIt">GitHub</a>
+        <a class="pill pill--small" href="#download">Download</a>
       </nav>
     </div>
   </header>
 
-  <main id="main">
-    <!-- The sample drive: the page opens on a working search. -->
-    <section class="stage" id="top">
-      <div class="wrap stage__head">
-        <p class="eyebrow"><span class="led" aria-hidden="true"></span>Sample drive connected</p>
-        <h1 class="display"><span data-count>37</span> files.<br><em>Not one</em> named for what's inside.</h1>
-        <p class="lede">This is what an old drive looks like to a computer: <code>IMG_4136.jpg</code>, <code>IMG_4213.jpg</code>, a video called <i>City break</i>. FindIt lets you search it the way you remember things. Ask it something. The search really runs, here, on your device.</p>
+  <main>
+    <section class="hero" id="top">
+      <div class="wrap wrap--narrow">
+        <img class="hero__icon" src="media/findit-icon.png" alt="" width="84" height="84">
+        <h1>Search your drive the way you remember.</h1>
+        <p class="hero__sub">Photos, videos and documents, found by what's in them. Offline, on the drive itself.</p>
+        <button class="textlink" type="button" data-open-tour>Watch the 38-second tour <span aria-hidden="true">›</span></button>
       </div>
 
       <div class="wrap">
         <div class="drive" id="sample-drive">
           <form class="seek" role="search">
-            <svg class="seek__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            <svg class="seek__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             <label class="visually-hidden" for="sample-query">Search the sample drive</label>
-            <input id="sample-query" type="search" placeholder="Describe a moment, a thing, or the words you recall" autocomplete="off" spellcheck="false" enterkeyhint="search">
+            <input id="sample-query" type="search" placeholder="Describe what you're looking for" autocomplete="off" spellcheck="false" enterkeyhint="search">
             <span class="seek__busy" aria-hidden="true"></span>
-            <button class="button" type="submit">Find</button>
           </form>
           <div class="hints" aria-label="Suggested searches"></div>
           <p class="readout" aria-live="polite"></p>
-          <ol class="wall" aria-label="Files on the sample drive"></ol>
-          <noscript><p class="readout">The live search needs JavaScript. Everything below describes what it does.</p></noscript>
+          <ul class="peek" aria-hidden="true"></ul>
+          <ol class="results" aria-label="Results"></ol>
+          <noscript><p class="readout">The live search needs JavaScript.</p></noscript>
         </div>
+        <p class="hero__note">A sample drive, searched right here in your browser. Nothing is uploaded.</p>
       </div>
     </section>
 
-    <!-- What the visitor just did, and how it differs from the app. -->
-    <section class="section" id="how">
+    <section class="section section--soft" id="yours">
       <div class="wrap">
-        <p class="label"><span class="num">01</span> What just happened</p>
-        <h2 class="title">You searched by memory, not by filename.</h2>
-
-        <ol class="beats">
-          <li>
-            <h3>It looked at the pictures.</h3>
-            <p>Every photo and every second of video was turned into numbers that describe what's in it. Your words are turned into the same kind of numbers, and the closest ones win. That is how “dog running on the beach” finds <code>IMG_4136.jpg</code>.</p>
-          </li>
-          <li>
-            <h3>It found the moment.</h3>
-            <p>Videos are sampled as stills, so a match points at a time, not a file. <i>Safari day 3</i> opens at 0:04, where the elephants are.</p>
-          </li>
-          <li>
-            <h3>It read the words, and what they mean.</h3>
-            <p>“AB-0091” finds the invoice by its exact words. “Can I keep a pet” finds the lease's pets clause, which never says “keep”.</p>
-          </li>
-        </ol>
-
-        <div class="compare">
-          <div class="compare__intro">
-            <h3>This page is a sketch.<br>The app is the real thing.</h3>
-            <p>The demo uses a small model so it can run in a browser tab. FindIt carries far more on the drive.</p>
-          </div>
-          <table>
-            <thead><tr><th scope="col"><span class="visually-hidden">Feature</span></th><th scope="col">This page</th><th scope="col">FindIt on your drive</th></tr></thead>
-            <tbody>
-              <tr><th scope="row">Understanding</th><td>MobileCLIP-S0, a 90 MB model</td><td>EmbeddingGemma across text, images, audio and video</td></tr>
-              <tr><th scope="row">Video</th><td>A still every second</td><td>Scenes sampled around every cut, plus sound and speech</td></tr>
-              <tr><th scope="row">Speech</th><td class="no">Not here</td><td>Whisper transcripts with timestamps</td></tr>
-              <tr><th scope="row">Scanned pages</th><td class="no">Not here</td><td>Read with Tesseract OCR</td></tr>
-              <tr><th scope="row">People</th><td class="no">Not here</td><td>Faces grouped and named on your PC</td></tr>
-              <tr><th scope="row">How many files</th><td>A few dozen, in memory</td><td>The whole drive</td></tr>
-              <tr><th scope="row">Where the index lives</th><td>This tab, gone when you close it</td><td>On the drive, next to your files</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <figure class="screen">
-          <div class="screen__frame">
-            <img src="media/app-results.webp" alt="The FindIt app showing photo results for “dog running on the beach”, each labelled Looks similar" width="1600" height="900" loading="lazy">
-            <button class="screen__play" type="button" data-open-tour>
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></svg>
-              <span>Watch the real app <small>0:38 · with sound</small></span>
-            </button>
-          </div>
-          <figcaption>The Windows app searching the same kind of library. <a href="https://github.com/adilzubair/FindIt/blob/main/docs/media/CREDITS.md">Media credits</a></figcaption>
-        </figure>
-      </div>
-    </section>
-
-    <!-- The visitor's own files. -->
-    <section class="section section--yours" id="yours">
-      <div class="wrap">
-        <p class="label"><span class="num">02</span> Your turn</p>
-        <h2 class="title">Now try your own files.</h2>
-        <p class="intro">Drop a handful of photos, a short video, a PDF or some notes. A model running in this tab reads them. Nothing is uploaded, and closing the tab forgets everything.</p>
+        <h2 class="heading">Now try your own files.</h2>
+        <p class="sub">Photos, a short video, a PDF. They never leave this tab.</p>
 
         <div class="yours" data-state="empty">
-          <label class="slot" for="own-files" data-drop>
+          <label class="slot" for="own-files">
             <input id="own-files" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/avif,video/*,application/pdf,.pdf,.txt,.md,.csv,.html,.json">
-            <span class="slot__art" aria-hidden="true"><span></span></span>
-            <span class="slot__title">Drop files here, or <u>choose them</u></span>
-            <span class="slot__note">Up to 60 files. The first time, your browser fetches about 115 MB of model and runtime from this site, then keeps it.</span>
+            <span class="slot__plus" aria-hidden="true"></span>
+            <span class="slot__title">Drop files here</span>
+            <span class="slot__hint">or <u>choose them</u> · up to 60</span>
           </label>
 
           <div class="prep" hidden>
-            <p class="prep__title">Preparing your files</p>
             <p class="prep__now" aria-live="polite">Loading the model</p>
-            <div class="bar-track"><span class="bar-fill"></span></div>
+            <div class="track"><span class="track__fill"></span></div>
             <p class="prep__count"></p>
           </div>
 
           <div class="drive" id="own-drive" hidden>
             <form class="seek" role="search">
-              <svg class="seek__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              <svg class="seek__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
               <label class="visually-hidden" for="own-query">Search your files</label>
               <input id="own-query" type="search" placeholder="Search your files" autocomplete="off" spellcheck="false" enterkeyhint="search">
               <span class="seek__busy" aria-hidden="true"></span>
-              <button class="button" type="submit">Find</button>
             </form>
             <div class="hints" aria-label="Suggested searches"></div>
             <p class="readout" aria-live="polite"></p>
-            <ol class="wall" aria-label="Your files"></ol>
+            <ol class="results" aria-label="Results"></ol>
             <div class="yours__actions">
-              <label class="button button--ghost" for="own-files">Add more files</label>
-              <button class="button button--ghost" type="button" data-forget>Forget these files</button>
+              <label class="textlink" for="own-files">Add more files</label>
+              <button class="textlink" type="button" data-forget>Forget these files</button>
             </div>
           </div>
           <ul class="skipped" hidden></ul>
         </div>
-        <p class="proof">Want proof? Open your browser's network panel. Once the model has arrived, searching makes no requests at all.</p>
+        <p class="fine">The first time, your browser fetches a small search model (about 115 MB) from this site. This page is a sketch: the app also searches speech, scanned pages and faces, across a whole drive.</p>
       </div>
     </section>
 
-    <!-- 03 Where it lives -->
-    <section class="section" id="drive">
-      <div class="wrap split">
-        <div class="split__text">
-          <p class="label"><span class="num">03</span> Where it lives</p>
-          <h2 class="title">In the app, everything it knows is on the drive.</h2>
-          <p>The program, its models, the index, previews, transcripts and people data all sit in one folder beside your files. Your folders stay exactly where they are, and FindIt only ever reads them.</p>
-          <p>That's what makes it portable. Prepare the drive once on a capable PC, then plug it into any Windows PC and search. Nothing to install, nothing to sign in to, no internet.</p>
+    <section class="section" id="features">
+      <div class="wrap">
+        <h2 class="heading">One search for everything you keep.</h2>
+        <div class="bento">
+          <figure class="tile tile--photo">
+            <img src="samples/photos/IMG_4136.webp" alt="A collie standing on a beach" width="720" height="540" loading="lazy">
+            <figcaption><strong>Photos, by what's in them.</strong> No tags or albums. Describe the picture.</figcaption>
+          </figure>
+          <figure class="tile tile--video">
+            <div class="tile__still">
+              <img src="samples/photos/IMG_4213.webp" alt="A herd of elephants walking through dry grass" width="720" height="476" loading="lazy">
+              <span class="tile__bar" aria-hidden="true"><span></span></span>
+            </div>
+            <figcaption><strong>Videos, at the right moment.</strong> Opens where it happens.</figcaption>
+          </figure>
+          <figure class="tile tile--doc">
+            <div class="tile__paper" aria-hidden="true">
+              <span class="tile__paper-title">3. Pets</span>
+              <span><mark>One cat or one small dog is permitted</mark> with the landlord's written consent.</span>
+            </div>
+            <figcaption><strong>Documents, by what they mean.</strong> “Can I keep a pet?” finds the clause.</figcaption>
+          </figure>
         </div>
-        <figure class="manifest" aria-label="What a prepared drive contains">
-          <header class="manifest__head"><span>E:\</span><span>Your drive</span></header>
-          <ol class="tree">
-            <li class="tree__yours"><code>Photos\</code><span>yours, only ever read</span></li>
-            <li class="tree__yours"><code>Videos\</code><span>yours, only ever read</span></li>
-            <li class="tree__yours"><code>Documents\</code><span>yours, only ever read</span></li>
-            <li class="tree__exe"><code>FindIt.exe</code><span>open this on any PC</span></li>
-            <li><code>FindIt\</code>
-              <ol>
-                <li><code>app\</code><span>the program, with its own .NET runtime and codecs</span></li>
-                <li><code>models\</code><span>EmbeddingGemma, Whisper, Tesseract, face models</span></li>
-                <li><code>archive\</code><span>the index, previews, transcripts and people</span></li>
-              </ol>
-            </li>
-          </ol>
+      </div>
+    </section>
+
+    <section class="section section--soft" id="app">
+      <div class="wrap">
+        <h2 class="heading">It all lives on the drive.</h2>
+        <p class="sub">Prepare it once. Plug it into any Windows PC and search. Nothing to install, no internet, no account.</p>
+        <figure class="shot">
+          <img src="media/app-results.webp" alt="The FindIt app showing photo results for “dog running on the beach”" width="1600" height="900" loading="lazy">
+          <button class="shot__play" type="button" data-open-tour aria-label="Play the 38-second tour">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></svg>
+          </button>
         </figure>
-      </div>
-      <div class="wrap">
-        <ol class="journey">
-          <li><span class="journey__n">1</span><h3>Prepare once</h3><p>Choose the folders to make searchable. A large library can take hours; pause whenever you like, and what's done is searchable along the way.</p></li>
-          <li><span class="journey__n">2</span><h3>Eject and carry it</h3><p>The index travels with the files. Next time, only what changed is read again.</p></li>
-          <li><span class="journey__n">3</span><h3>Search anywhere</h3><p>Open <code>FindIt.exe</code> on any Windows 10 or 11 PC. Searching works on modest hardware.</p></li>
-        </ol>
-        <p class="footnote">On the host PC, FindIt leaves only disposable caches in <code>%LOCALAPPDATA%\FindIt</code>: a copy of the program so the drive can be ejected cleanly, a note of which models were already verified, and tiny process records with no filenames or content.</p>
+        <ul class="facts">
+          <li><strong>Originals untouched</strong><span>Never modified, moved or uploaded.</span></li>
+          <li><strong>Truly offline</strong><span>No telemetry, no accounts, no cloud.</span></li>
+          <li><strong>Crash-safe</strong><span>A complete index is always kept.</span></li>
+          <li><strong>Honest results</strong><span>Every match says why it matched.</span></li>
+        </ul>
       </div>
     </section>
 
-    <!-- 04 Promises -->
-    <section class="section section--lit" id="promises">
-      <div class="wrap">
-        <p class="label"><span class="num">04</span> Promises</p>
-        <h2 class="title">What it will never do with your files.</h2>
-        <ol class="ledger">
-          <li>
-            <h3><em>Never</em> change them.</h3>
-            <p>Originals are never modified, moved or renamed. On a physical test drive, updating FindIt in place left every existing file identical by SHA-256, length and modification time.</p>
-            <a href="https://github.com/adilzubair/FindIt/blob/main/docs/drive-validation.md">Drive validation</a>
-          </li>
-          <li>
-            <h3><em>Never</em> send them anywhere.</h3>
-            <p>No telemetry, no accounts and no background network access. Every model runs on the PC in front of you, just as the demo above runs in your browser.</p>
-            <a href="https://github.com/adilzubair/FindIt/blob/main/docs/architecture.md">Architecture</a>
-          </li>
-          <li>
-            <h3><em>Never</em> lose the index.</h3>
-            <p>Preparation writes checksummed generations and switches over only when one is complete. Twenty-five recovery scenarios, from killed processes to a full disk, keep the previous index intact.</p>
-            <a href="https://github.com/adilzubair/FindIt/blob/main/docs/recovery-validation.md">Recovery validation</a>
-          </li>
-          <li>
-            <h3><em>Never</em> pretend to be sure.</h3>
-            <p>Every result says why it matched. People results are labelled as possible matches until you confirm who is who.</p>
-            <a href="https://github.com/adilzubair/FindIt/blob/main/docs/people-evidence.md">People evidence</a>
-          </li>
-        </ol>
-      </div>
-    </section>
-
-    <!-- 05 Status -->
-    <section class="section" id="status">
-      <div class="wrap">
-        <p class="label"><span class="num">05</span> Status</p>
-        <h2 class="title">An honest preview.</h2>
-        <p class="intro">FindIt works end to end and is covered by over 200 automated tests and physical-drive checks. It has not passed its public-release gates yet.</p>
-        <div class="status">
-          <div class="status__col">
-            <h3 class="status__h"><span class="tick" aria-hidden="true"></span>Verified</h3>
-            <ul>
-              <li>Exact and semantic search, timestamped speech and video, and named-person evidence, on a physical FAT32 USB stick</li>
-              <li>A prepared drive opened and searched on a second PC</li>
-              <li>25 crash and corruption recovery scenarios with the real worker</li>
-              <li>Native index recall of 97–100% at 100k records, warm P95 under 150 ms</li>
-            </ul>
-          </div>
-          <div class="status__col status__col--open">
-            <h3 class="status__h"><span class="ring" aria-hidden="true"></span>Still to prove</h3>
-            <ul>
-              <li>Clean, offline Windows 10 and 11 machines with no runtimes installed</li>
-              <li>One million files on an 8 GB, CPU-only laptop</li>
-              <li>Relevance on representative held-out queries, Hit@10 of 85% or better</li>
-              <li>Code-signed packages</li>
-            </ul>
-          </div>
-        </div>
-        <p class="footnote"><a href="https://github.com/adilzubair/FindIt/blob/main/docs/validation.md">Read the full validation status</a>, including methods and known limits.</p>
-      </div>
-    </section>
-
-    <!-- 06 Get it -->
-    <section class="section section--get" id="get">
-      <div class="wrap get">
-        <div>
-          <p class="label"><span class="num">06</span> Get it</p>
-          <h2 class="title">Put it on a drive.</h2>
-          <ol class="steps">
-            <li><h3>Download and check it</h3><p>Compare the hash with the published checksum.</p>
-              <div class="cmd"><code data-cmd>Get-FileHash .\FindIt-<span data-release-version>0.1.0-preview.9</span>-win-x64.zip</code><button type="button" class="cmd__copy" data-copy>Copy</button></div>
-            </li>
-            <li><h3>Extract it to the root of the drive</h3><p>So <code>FindIt.exe</code> and a <code>FindIt</code> folder sit beside your own folders. Allow about 2 GB plus room for the index; NTFS, exFAT and FAT32 all work.</p></li>
-            <li><h3>Prepare, eject, carry</h3><p>Open <code>FindIt.exe</code>, choose folders under <strong>Drive</strong>, and start. Use <strong>Eject</strong> before unplugging.</p></li>
-          </ol>
-        </div>
-        <div class="ticket">
-          <header class="ticket__head"><span>FindIt</span><span data-release-version>0.1.0-preview.9</span></header>
-          <p class="ticket__file">FindIt-<span data-release-version>0.1.0-preview.9</span>-win-x64.zip</p>
-          <p class="ticket__meta"><span data-release-size>1.7 GB</span> · Windows 10 22H2 or 11, x64 · <span data-release-date>23 October 2026</span></p>
-          <a class="button button--wide" href="https://github.com/adilzubair/FindIt/releases/download/v0.1.0-preview.9/FindIt-0.1.0-preview.9-win-x64.zip">Download the ZIP</a>
-          <p class="ticket__links">
-            <a href="https://github.com/adilzubair/FindIt/releases/download/v0.1.0-preview.9/FindIt-0.1.0-preview.9-win-x64.zip.sha256">SHA-256 checksum</a>
-            <a href="https://github.com/adilzubair/FindIt/releases/tag/v0.1.0-preview.9">Release notes</a>
-            <a href="https://github.com/adilzubair/FindIt#building-from-source">Build from source</a>
-          </p>
-          <p class="ticket__warn">Development preview. Packages aren't code-signed yet, so Windows SmartScreen may ask you to confirm the first launch.</p>
-        </div>
+    <section class="section download" id="download">
+      <div class="wrap wrap--narrow">
+        <img class="download__icon" src="media/findit-icon.png" alt="" width="96" height="96" loading="lazy">
+        <h2 class="heading">FindIt for Windows</h2>
+        <p class="sub">Windows 10 and 11 · x64 · Free and open source</p>
+        <a class="pill" href="https://github.com/adilzubair/FindIt/releases/download/v0.1.0-preview.9/FindIt-0.1.0-preview.9-win-x64.zip">Download <span data-release-version>0.1.0-preview.9</span></a>
+        <p class="download__meta"><span data-release-size>1.7 GB</span> ZIP · <span data-release-date>23 October 2026</span></p>
+        <p class="download__links">
+          <a href="https://github.com/adilzubair/FindIt/releases/download/v0.1.0-preview.9/FindIt-0.1.0-preview.9-win-x64.zip.sha256">SHA-256</a>
+          <a href="https://github.com/adilzubair/FindIt/releases/tag/v0.1.0-preview.9">Release notes</a>
+          <a href="https://github.com/adilzubair/FindIt">Source code</a>
+          <a href="https://github.com/adilzubair/FindIt/blob/main/docs/validation.md">Validation status</a>
+        </p>
+        <p class="fine">Development preview. Extract it to the root of an external drive and open <code>FindIt.exe</code>. Not code-signed yet, so Windows may ask you to confirm.</p>
       </div>
     </section>
   </main>
 
-  <footer class="colophon">
-    <div class="wrap colophon__grid">
-      <div>
-        <a class="brand" href="#top"><img src="media/findit-icon.png" alt="" width="26" height="26"><span>FindIt</span></a>
-        <p>Offline search that travels with your files. MIT licensed.</p>
-      </div>
-      <ul>
-        <li><a href="https://github.com/adilzubair/FindIt">Source on GitHub</a></li>
-        <li><a href="https://github.com/adilzubair/FindIt/blob/main/CHANGELOG.md">Changelog</a></li>
-        <li><a href="https://github.com/adilzubair/FindIt/issues/new/choose">Report a problem</a></li>
-        <li><a href="https://github.com/adilzubair/FindIt/blob/main/website/README.md#credits">Credits and licences</a></li>
-      </ul>
-      <div>
-        <p>Made by <a href="https://muhamedadil.com/">Muhamed Adil</a>. From the same workbench: <a href="https://scout.muhamedadil.com/">Scout</a>, a private launcher for Windows 11.</p>
-        <p class="colophon__note">This page loads nothing from anywhere else. The model, fonts and code are served from this site; there are no analytics or cookies. Sample photos: COCO 2017, CC BY 2.0. Model: MobileCLIP-S0 by Apple.</p>
-      </div>
+  <footer class="foot">
+    <div class="wrap foot__row">
+      <p>Made by <a href="https://muhamedadil.com/">Muhamed Adil</a> · Also: <a href="https://scout.muhamedadil.com/">Scout</a></p>
+      <p>This page loads nothing from anywhere else. <a href="https://github.com/adilzubair/FindIt/blob/main/website/README.md#credits">Credits</a></p>
     </div>
   </footer>
 
   <dialog class="viewer" aria-label="File preview">
     <div class="viewer__media"></div>
     <aside class="viewer__info">
-      <form method="dialog"><button class="viewer__close" aria-label="Close preview">Close</button></form>
+      <form method="dialog"><button class="viewer__close" aria-label="Close preview"><span aria-hidden="true">×</span></button></form>
       <h2 class="viewer__name"></h2>
       <p class="viewer__meta"></p>
-      <p class="label">Why it matched</p>
       <ul class="viewer__why"></ul>
       <a class="viewer__original" href="#" target="_blank" rel="noopener">Open the original</a>
     </aside>
   </dialog>
 
   <dialog class="tour" aria-label="FindIt tour video">
-    <form method="dialog"><button class="tour__close" aria-label="Close video">Close</button></form>
+    <form method="dialog"><button class="tour__close" aria-label="Close video"><span aria-hidden="true">×</span></button></form>
     <video controls playsinline preload="none" poster="media/app-results.webp" width="1920" height="1080">
       <source src="media/findit-demo.mp4" type="video/mp4">
     </video>
