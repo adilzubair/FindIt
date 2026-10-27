@@ -123,7 +123,6 @@ public sealed partial class ArchiveService
             var ranks = new Dictionary<long, RankedSegment>();
             bool canSearchDeeper = false;
             var lexical = QueryTerms.Parse(query);
-            var tokens = lexical.Select(t => t.Text).ToArray();
             string match = string.Join(request.Filters.ExactOnly ? " AND " : " OR ", lexical.Select(t => "\"" + t.Text.Replace("\"", "\"\"") + "\"" + (t.Prefix ? "*" : "")));
             // Every keyword hit used to outrank the closest match by meaning, so a recording that says "boat" beat the video
             // of dolphins beside one. With three or more words, a hit ranks only if its name, path or text holds most of the
@@ -237,7 +236,7 @@ public sealed partial class ArchiveService
             if (ambiguous.Count > 0) notice = $"Multiple people use the name {string.Join(", ", ambiguous.Distinct(StringComparer.OrdinalIgnoreCase))}. Select a person filter to resolve the name. " + notice;
             if (query.Length == 0)
             {
-                var results = HydrateSearchFiles(db, ordered.Take(limit), tokens, personIds, people, false, cancellationToken);
+                var results = HydrateSearchFiles(db, ordered.Take(limit), lexical, personIds, people, false, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (ReadSearchRevision() != revision) return RestartSearch(generation.GenerationId, "People metadata changed. Run the search again.");
                 return new SearchResponse { GenerationId = generation.GenerationId, Results = results,
@@ -247,7 +246,7 @@ public sealed partial class ArchiveService
             // Leave room for bounded token/name/notice provenance, including unusually long paths/names.
             long retained = 64 * 1024;
             var bounded = ordered.TakeWhile(f => (retained += f.EstimatedBytes) <= SearchSessionCache.MaximumBytes).ToArray();
-            var created = new SearchSession { Binding = binding, Files = bounded, Tokens = tokens, PersonIds = personIds,
+            var created = new SearchSession { Binding = binding, Files = bounded, Tokens = lexical, PersonIds = personIds,
                 People = detected.Select(p => new PersonChip(p.Id, p.Name)).ToArray(), Notice = notice,
                 SemanticUsed = semanticUsed, CanSearchDeeper = candidates < 16384 && (canSearchDeeper || bounded.Length != ordered.Length), RetrievalBudget = candidates };
             var response = SessionPage(db, created, generation.GenerationId, people, 0, limit, watch, cancellationToken);
@@ -381,10 +380,16 @@ public sealed partial class ArchiveService
         Thumbnail = reader.IsDBNull(start + 6) ? null : Blob(reader.GetString(start + 6)),
         Label = !reader.IsDBNull(start + 5) ? "Page " + reader.GetInt32(start + 5) : !reader.IsDBNull(start + 3) ? TimeSpan.FromMilliseconds(reader.GetInt64(start + 3)).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) : ((SegmentKind)reader.GetInt32(start + 1)).ToString()
     };
-    private static string Snippet(string text, string[] tokens)
+    // Centres on the passage holding the most distinct query words, then the longest ones, matched where words start as the
+    // search matches them, so "get" no longer lands inside "together". Text no term matches that way keeps the earliest substring.
+    internal static string Snippet(string text, QueryTerm[] terms)
     {
         if (text.Length <= 260) return text;
-        int first = tokens.Select(t => text.IndexOf(t, StringComparison.OrdinalIgnoreCase)).Where(i => i >= 0).DefaultIfEmpty(0).Min(); int start = Math.Max(0, first - 50);
+        var hits = terms.Select(t => (t.Text.Length, Pattern: QueryTerms.Pattern(t))).Where(t => t.Pattern is not null)
+            .SelectMany((t, term) => Regex.Matches(text, t.Pattern!, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Select(m => (m.Index, Term: term, t.Length))).OrderBy(h => h.Index).ToArray();
+        int first = hits.Length == 0 ? terms.Select(t => text.IndexOf(t.Text, StringComparison.OrdinalIgnoreCase)).Where(i => i >= 0).DefaultIfEmpty(0).Min()
+            : hits.Select((h, i) => (h.Index, Near: hits.Skip(i).TakeWhile(n => n.Index < h.Index + 200).DistinctBy(n => n.Term).ToArray())).MaxBy(w => (w.Near.Length, w.Near.Sum(n => n.Length))).Index;
+        int start = Math.Max(0, first - 50);
         return (start > 0 ? "…" : "") + text.Substring(start, Math.Min(260, text.Length - start)) + "…";
     }
     // Light verbs and adverbial particles carry a request's grammar ("get my deposit back"), not its subject. They still match,

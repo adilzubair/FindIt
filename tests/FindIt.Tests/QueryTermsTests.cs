@@ -19,6 +19,31 @@ public sealed class QueryTermsTests
     }
 
     [TestMethod]
+    public void PreviewHighlightsSearchedWordsWhereWordsStart()
+    {
+        const string text = "Signed together with the Deposit, when the keys come back. Get the backup.";
+        var highlighter = QueryTerms.Highlighter("when do I get my deposit back")!;
+        CollectionAssert.AreEqual(new[] { "Deposit", "back", "Get", "back" }, highlighter.Matches(text).Select(m => m.Value).ToArray(), "Not inside \"together\", not the ignored \"when\".");
+        Assert.AreEqual("IMG_6025", QueryTerms.Highlighter("IMG_6025")!.Match("Photos/IMG_6025.JPG").Value);
+        Assert.AreEqual("last ferry back", QueryTerms.Highlighter("\"last ferry back\"")!.Match("and the last ferry back leaves at 7.40").Value);
+        Assert.IsFalse(QueryTerms.Highlighter("\"last ferry back\"")!.IsMatch("the last ferry backs up"));
+        Assert.IsNull(QueryTerms.Highlighter("what is the"));
+    }
+
+    [TestMethod]
+    public void SnippetCentresOnTheMostInformativePassage()
+    {
+        string filler = string.Concat(Enumerable.Repeat("The Landlord lets the apartment with its fixtures and furniture. ", 8));
+        string tenancy = "This agreement is made together with the attached inventory. " + filler + "5. DEPOSIT On signing the Tenant pays a deposit. The Landlord will return the Deposit within fourteen (14) days. " + filler;
+        string snippet = ArchiveService.Snippet(tenancy, QueryTerms.Parse("when do I get my deposit back"));
+        StringAssert.Contains(snippet, "return the Deposit"); Assert.IsFalse(snippet.Contains("together", StringComparison.Ordinal));
+
+        string memo = "The ferry to the island leaves at 9.15. " + filler + "And the last ferry back leaves at 7.40. " + filler;
+        StringAssert.Contains(ArchiveService.Snippet(memo, QueryTerms.Parse("what time is the last ferry back")), "last ferry back leaves at 7.40");
+        StringAssert.Contains(ArchiveService.Snippet(filler + "Signed together. " + filler, QueryTerms.Parse("gether")), "together", "Without a word-start match the earliest substring is kept.");
+    }
+
+    [TestMethod]
     public void CoverageReadsWordsAsTheCatalogIndexDoes()
     {
         CollectionAssert.AreEqual(new[] { "goreme", "nevsehir", "img", "6025", "jpg", "بيتي" }, ArchiveService.Words("Göreme, Nevşehir — IMG_6025.JPG بيتي"));

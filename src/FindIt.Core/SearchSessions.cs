@@ -14,7 +14,7 @@ internal sealed class SearchSession
     public Guid Id { get; } = Guid.NewGuid();
     public required string Binding { get; init; }
     public required FrozenSearchFile[] Files { get; init; }
-    public required string[] Tokens { get; init; }
+    public required QueryTerm[] Tokens { get; init; }
     public required PersonChip[] People { get; init; }
     public required Guid[] PersonIds { get; init; }
     public required string Notice { get; init; }
@@ -22,7 +22,7 @@ internal sealed class SearchSession
     public bool CanSearchDeeper { get; init; }
     public int RetrievalBudget { get; init; }
     public long LastUsed { get; set; }
-    public long EstimatedBytes => 512L + Files.Sum(f => f.EstimatedBytes) + Tokens.Sum(t => 32L + t.Length * 2L)
+    public long EstimatedBytes => 512L + Files.Sum(f => f.EstimatedBytes) + Tokens.Sum(t => 32L + t.Text.Length * 2L)
         + People.Sum(p => 64L + p.Name.Length * 2L) + PersonIds.Length * 16L + Notice.Length * 2L;
 }
 
