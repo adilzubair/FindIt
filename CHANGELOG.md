@@ -4,6 +4,10 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Describing a photo or video ("hot air balloons", "dolphins swimming beside the boat") finds it first again, instead of documents and voice memos that share one of its words. A document still comes first when it holds most of what you typed, and codes, file names, quoted phrases and **Exact words** work as before. Short words no longer match longer ones ("hot" found "hotel") unless they are the word you are still typing.
+
 ## [0.1.0-preview.10] - 2026-10-27
 
 ### Added
