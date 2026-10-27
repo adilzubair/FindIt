@@ -1,7 +1,7 @@
 // Search logic shared by the page and by tools/index-samples.mjs. No browser or Node APIs here.
 
-// Video sampling: one still per second, taken mid-second, shown as 192×108 in results.
-export const FRAME = { offset: 0.5, step: 1, width: 192, height: 108, maxFrames: 90 };
+// Video sampling: one still per second, taken mid-second, kept at 480×270 so result cards stay sharp on high-density screens.
+export const FRAME = { offset: 0.5, step: 1, width: 480, height: 270 };
 
 export const SUGGESTIONS = [
   'a tram in the street',

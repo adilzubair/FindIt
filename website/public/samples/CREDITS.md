@@ -1,12 +1,12 @@
 # Sample drive credits
 
-The photos on the website's sample drive come from [COCO 2017](https://cocodataset.org/). Each one is licensed by its Flickr author under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/), and none shows a person. They were renamed to camera-style names and resized.
+The photos on the website's sample drive come from [COCO 2017](https://cocodataset.org/). Each one is licensed by its Flickr author under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/), and none shows a person. They were renamed to camera-style names and taken from the 1024-pixel copies on Flickr.
 
 ## Photos
 
 | On the sample drive | COCO image | Flickr photo |
 |---|---|---|
-| IMG_5201.jpg | [000000252749.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000252749.jpg) | [10027541544](https://www.flickr.com/photo.gne?id=10027541544) |
+| IMG_5201.jpg | [000000145956.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000145956.jpg) | [7566806072](https://www.flickr.com/photo.gne?id=7566806072) |
 | IMG_5208.jpg | [000000469754.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000469754.jpg) | [8193378498](https://www.flickr.com/photo.gne?id=8193378498) |
 | IMG_5215.jpg | [000000341550.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000341550.jpg) | [4489645856](https://www.flickr.com/photo.gne?id=4489645856) |
 | IMG_5218.jpg | [000000385236.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000385236.jpg) | [7056683671](https://www.flickr.com/photo.gne?id=7056683671) |
@@ -18,20 +18,20 @@ The photos on the website's sample drive come from [COCO 2017](https://cocodatas
 | IMG_5248.jpg | [000000010405.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000010405.jpg) | [5694693358](https://www.flickr.com/photo.gne?id=5694693358) |
 | IMG_5251.jpg | [000000097747.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000097747.jpg) | [3117092924](https://www.flickr.com/photo.gne?id=3117092924) |
 | IMG_5256.jpg | [000000514376.jpg](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000514376.jpg) | [8750726399](https://www.flickr.com/photo.gne?id=8750726399) |
-| IMG_5260.jpg | [000000308110.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000308110.jpg) | [8614785192](https://www.flickr.com/photo.gne?id=8614785192) |
+| IMG_5260.jpg | [000000234660.jpg](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000234660.jpg) | [9244258043](https://www.flickr.com/photo.gne?id=9244258043) |
 | IMG_5263.jpg | [000000426611.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000426611.jpg) | [9406578255](https://www.flickr.com/photo.gne?id=9406578255) |
 | IMG_5267.jpg | [000000541957.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000541957.jpg) | [9634536083](https://www.flickr.com/photo.gne?id=9634536083) |
 | IMG_5272.jpg | [000000355169.jpg](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000355169.jpg) | [6602610383](https://www.flickr.com/photo.gne?id=6602610383) |
 | IMG_5279.jpg | [000000338321.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000338321.jpg) | [7157351269](https://www.flickr.com/photo.gne?id=7157351269) |
-| IMG_5283.jpg | [000000495054.jpg](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000495054.jpg) | [3697328838](https://www.flickr.com/photo.gne?id=3697328838) |
+| IMG_5283.jpg | [000000096549.jpg](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000096549.jpg) | [8622452992](https://www.flickr.com/photo.gne?id=8622452992) |
 | IMG_5290.jpg | [000000257941.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000257941.jpg) | [7857283620](https://www.flickr.com/photo.gne?id=7857283620) |
 | IMG_5294.jpg | [000000363525.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000363525.jpg) | [4919426848](https://www.flickr.com/photo.gne?id=4919426848) |
 | IMG_5297.jpg | [000000462071.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000462071.jpg) | [3311113056](https://www.flickr.com/photo.gne?id=3311113056) |
 | IMG_5301.jpg | [000000277914.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000277914.jpg) | [3923461294](https://www.flickr.com/photo.gne?id=3923461294) |
-| IMG_5308.jpg | [000000452724.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000452724.jpg) | [4625453890](https://www.flickr.com/photo.gne?id=4625453890) |
+| IMG_5308.jpg | [000000384375.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000384375.jpg) | [4634546881](https://www.flickr.com/photo.gne?id=4634546881) |
 | IMG_5315.jpg | [000000310622.jpg](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000310622.jpg) | [3482867488](https://www.flickr.com/photo.gne?id=3482867488) |
-| IMG_5320.jpg | [000000525208.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000525208.jpg) | [6878080137](https://www.flickr.com/photo.gne?id=6878080137) |
-| IMG_5326.jpg | [000000505510.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000505510.jpg) | [2985288185](https://www.flickr.com/photo.gne?id=2985288185) |
+| IMG_5320.jpg | [000000159446.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000159446.jpg) | [10182100725](https://www.flickr.com/photo.gne?id=10182100725) |
+| IMG_5326.jpg | [000000258538.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000258538.jpg) | [2261809679](https://www.flickr.com/photo.gne?id=2261809679) |
 | IMG_5329.jpg | [000000488789.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000488789.jpg) | [5039195598](https://www.flickr.com/photo.gne?id=5039195598) |
 | IMG_5336.jpg | [000000068866.jpg](https://s3.amazonaws.com/images.cocodataset.org/train2017/000000068866.jpg) | [2329022215](https://www.flickr.com/photo.gne?id=2329022215) |
 
