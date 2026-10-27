@@ -9,6 +9,10 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 - A 38-second demo video at the top of the README, recorded from the real app on a demo library ([credits](docs/media/CREDITS.md)).
 - The project website at [findit.muhamedadil.com](https://findit.muhamedadil.com/), built from `website/` and deployed to GitHub Pages. Visitors can search a sample drive with a small model that runs in the browser. Its download links follow the newest published release.
 
+### Changed
+
+- A person's quick yes/no suggestions show one face per moment, instead of near-identical faces from neighbouring video frames.
+
 ## [0.1.0-preview.9] - 2026-10-23
 
 First version prepared for public release. Earlier previews were distributed privately for testing.

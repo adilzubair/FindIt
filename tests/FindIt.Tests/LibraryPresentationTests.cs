@@ -159,4 +159,19 @@ public class LibraryPresentationTests
         Assert.IsNull(state.ValidateDateRange());
         Assert.AreEqual("The end date must be on or after the start date.", (state with { DateIndex = 3 }).ValidateDateRange());
     }
+
+    [TestMethod]
+    public void PersonSuggestionsShowOneFacePerMomentInQualityOrder()
+    {
+        Guid video = Guid.NewGuid(), other = Guid.NewGuid(), photo = Guid.NewGuid();
+        PersonObservation Face(long id, Guid file, long? at) => new() { Id = id, FileId = file, StartMs = at };
+        // Faces sampled twice a second from one shot, a later scene, another video and a photo with two faces.
+        var ordered = new[]
+        {
+            Face(1, video, 10_000), Face(2, video, 10_500), Face(3, video, 11_000), Face(4, other, 10_000),
+            Face(5, video, 39_999), Face(6, video, 40_000), Face(7, photo, null), Face(8, photo, null), Face(9, video, 9_000),
+        };
+        var kept = PersonSuggestions.DistinctMoments(ordered).Select(face => face.Id).ToArray();
+        CollectionAssert.AreEqual(new long[] { 1, 4, 6, 7 }, kept);
+    }
 }

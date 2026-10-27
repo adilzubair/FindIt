@@ -112,6 +112,29 @@ internal sealed record LibraryFilterState(
     }
 }
 
+internal static class PersonSuggestions
+{
+    internal const long MomentSpacingMs = 30_000;
+
+    /// <summary>
+    /// Video faces are sampled twice a second, so one person's best faces are usually neighbouring
+    /// frames of the same shot. Keeps the first face of each file per half minute, in the given order,
+    /// so every suggestion shows a different moment. A photo counts as a single moment.
+    /// </summary>
+    public static IEnumerable<PersonObservation> DistinctMoments(IEnumerable<PersonObservation> observations, long spacingMs = MomentSpacingMs)
+    {
+        var kept = new Dictionary<Guid, List<long>>();
+        foreach (var observation in observations)
+        {
+            if (!kept.TryGetValue(observation.FileId, out var times)) kept[observation.FileId] = times = [];
+            var at = observation.StartMs ?? 0;
+            if (times.Exists(time => Math.Abs(time - at) < spacingMs)) continue;
+            times.Add(at);
+            yield return observation;
+        }
+    }
+}
+
 /// <summary>Media positions as people read them: 0:06, 4:05, 1:02:10.</summary>
 public static class ClockFormat
 {
