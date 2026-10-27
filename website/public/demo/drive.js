@@ -83,7 +83,10 @@ export class Drive {
   // Before a search: a quiet row of what is on the drive, under the names a computer sees.
   renderPeek() {
     if (!this.peek) return;
-    this.peek.replaceChildren(...this.library.files.filter((f) => f.kind !== 'document').slice(0, 9).map((file) => {
+    // Spread the picks across the drive so the row shows its variety.
+    const visual = this.library.files.filter((f) => f.kind !== 'document');
+    const picks = Array.from({ length: Math.min(9, visual.length) }, (_, i) => visual[Math.floor((i * visual.length) / Math.min(9, visual.length))]);
+    this.peek.replaceChildren(...picks.map((file) => {
       const item = el('li', 'peek__item');
       const media = el('span', 'peek__media');
       if (file.kind === 'photo') media.append(Object.assign(el('img'), { src: file.src, alt: '', loading: 'lazy', decoding: 'async' }));

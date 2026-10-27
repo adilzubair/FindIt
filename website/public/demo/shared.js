@@ -4,16 +4,18 @@
 export const FRAME = { offset: 0.5, step: 1, width: 192, height: 108, maxFrames: 90 };
 
 export const SUGGESTIONS = [
-  'dog running on the beach',
-  'elephants crossing the road',
-  'a cat on a desk',
-  'what to buy for pizza night',
-  'boats in a harbour',
-  'AB-0091',
-  'can I keep a pet',
-  'plane in the sky',
-  'a train at the station',
-  'the moon',
+  'a tram in the street',
+  'boats in a harbour at night',
+  'fruit at the market',
+  'a hotel room',
+  'train to Porto',
+  'where are we staying',
+  'QX-4471',
+  'a clock tower',
+  'the city at night',
+  'coffee and cake',
+  'a train crossing a bridge',
+  'where should we eat',
 ];
 
 // The image model was trained on captions, so a caption-like prompt ranks pictures better.
@@ -78,8 +80,19 @@ export function findWords(text, terms) {
     }
     if (any) seen.add(term);
   }
-  return seen.size === terms.length ? found.sort((a, b) => a[0] - b[0]) : [];
+  if (seen.size !== terms.length) return [];
+  found.sort((a, b) => a[0] - b[0]);
+  // Several words only count when they appear together, within a sentence or two of one another.
+  if (terms.length > 1) {
+    const near = (term, at) => found.some(([start]) => Math.abs(start - at) <= NEAR && text.slice(start, start + term.length).toLowerCase() === term);
+    const [first, ...rest] = terms;
+    const anchors = found.filter(([start]) => text.slice(start, start + first.length).toLowerCase() === first);
+    if (!anchors.some(([at]) => rest.every((term) => near(term, at)))) return [];
+  }
+  return found;
 }
+
+const NEAR = 120;
 
 // Ranks a library for one query. `vectors` holds { picture, passage } query embeddings when available.
 export function search(library, query, vectors = {}) {

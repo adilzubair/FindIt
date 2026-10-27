@@ -16,7 +16,7 @@ const sample = await loadSamples('samples/index.json');
 const sampleDrive = new Drive(sampleRoot, {
   library: sample,
   viewer,
-  suggestions: ['dog running on the beach', 'elephants crossing the road', 'what to buy for pizza night', 'can I keep a pet', 'AB-0091'],
+  suggestions: ['a tram in the street', 'boats in a harbour at night', 'coffee and cake', 'where are we staying', 'QX-4471'],
   idle: `${sample.files.length} files on this drive. None of them named for what's inside.`,
 });
 
