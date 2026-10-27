@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FindIt — search your drive the way you remember</title>
+  <meta name="description" content="FindIt puts a private search engine on your external drive. Find photos, videos and documents by what's in them, offline. Try it in your browser.">
+  <meta name="findit-version" content="0.1.0-preview.9">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="canonical" href="https://findit.muhamedadil.com/">
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" href="media/findit-icon.png" type="image/png">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="FindIt — search your drive the way you remember">
+  <meta property="og:description" content="Offline search for photos, videos and documents, carried on the drive itself. Try it in your browser.">
+  <meta property="og:url" content="https://findit.muhamedadil.com/">
+  <meta property="og:image" content="https://findit.muhamedadil.com/media/og.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="modulepreload" href="demo/drive.js">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="bar">
+    <nav class="bar__pill" aria-label="Main">
+      <a class="brand" href="#top" aria-label="FindIt home"><img src="media/findit-icon.png" alt="" width="22" height="22"><span>FindIt</span></a>
+      <span class="bar__links">
+        <a href="#features">Features</a>
+        <a href="#app">The app</a>
+        <a href="https://github.com/adilzubair/FindIt">GitHub</a>
+      </span>
+      <a class="pill pill--small" href="#download">Download</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="top">
+      <div class="wrap wrap--narrow">
+        <img class="hero__icon" src="media/findit-icon.png" alt="" width="84" height="84">
+        <h1>Search your drive the way you remember.</h1>
+        <p class="hero__sub">Photos, videos and documents, found by what's in them. Offline, on the drive itself.</p>
+        <button class="textlink" type="button" data-open-tour>Watch the 38-second tour <span aria-hidden="true">›</span></button>
+      </div>
+
+      <div class="wrap">
+        <div class="drive" id="sample-drive">
+          <form class="seek" role="search">
+            <svg class="seek__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <label class="visually-hidden" for="sample-query">Search the sample drive</label>
+            <input id="sample-query" type="search" placeholder="Describe what you're looking for" autocomplete="off" spellcheck="false" enterkeyhint="search">
+            <span class="seek__busy" aria-hidden="true"></span>
+          </form>
+          <div class="hints" aria-label="Suggested searches"></div>
+          <p class="readout" aria-live="polite"></p>
+          <ul class="peek" aria-hidden="true"></ul>
+          <ol class="results" aria-label="Results"></ol>
+          <noscript><p class="readout">The live search needs JavaScript.</p></noscript>
+        </div>
+        <p class="hero__note">A sample drive, searched right here in your browser. Nothing is uploaded.</p>
+      </div>
+    </section>
+
+    <section class="section section--soft" id="features">
+      <div class="wrap">
+        <h2 class="heading">One search for everything you keep.</h2>
+        <div class="bento">
+          <figure class="tile tile--photo">
+            <img src="media/feature-photo.webp" alt="Wooden rabelo boats on the Douro below the lit Dom Luís I bridge in Porto at dusk" width="1600" height="1600" loading="lazy">
+            <figcaption><strong>Photos, by what's in them.</strong> No tags or albums. Describe the picture.</figcaption>
+          </figure>
+          <figure class="tile tile--video">
+            <div class="tile__still">
+              <img src="media/feature-video.webp" alt="Two of Porto's old yellow trams side by side in a cobbled square" width="1600" height="900" loading="lazy">
+              <span class="tile__bar" aria-hidden="true"><span></span></span>
+            </div>
+            <figcaption><strong>Videos, at the right moment.</strong> Opens where it happens.</figcaption>
+          </figure>
+          <figure class="tile tile--doc">
+            <div class="tile__paper" aria-hidden="true">
+              <span class="tile__paper-title">Casa da Ribeira, Porto</span>
+              <span><mark>Three nights, from Sunday 14 June</mark> to Wednesday 17 June. Check-in is from 15:00.</span>
+            </div>
+            <figcaption><strong>Documents, by what they mean.</strong> “Where are we staying?” finds the booking.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="app">
+      <div class="wrap">
+        <h2 class="heading">It all lives on the drive.</h2>
+        <p class="sub">Prepare it once. Plug it into any Windows PC and search. Nothing to install, no internet, no account.</p>
+        <figure class="shot">
+          <img src="media/app-drive.webp" alt="The FindIt app’s Drive page: a prepared library, ready to search, with its folders and the models available on this PC" width="1600" height="900" loading="lazy">
+          <button class="shot__play" type="button" data-open-tour aria-label="Play the 38-second tour">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></svg>
+          </button>
+        </figure>
+        <ul class="facts">
+          <li><strong>Originals untouched</strong><span>Never modified, moved or uploaded.</span></li>
+          <li><strong>Truly offline</strong><span>No telemetry, no accounts, no cloud.</span></li>
+          <li><strong>Crash-safe</strong><span>A complete index is always kept.</span></li>
+          <li><strong>Honest results</strong><span>Every match says why it matched.</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section download" id="download">
+      <div class="wrap wrap--narrow">
+        <img class="download__icon" src="media/findit-icon.png" alt="" width="96" height="96" loading="lazy">
+        <h2 class="heading">FindIt for Windows</h2>
+        <p class="sub">Windows 10 and 11 · x64 · Free and open source</p>
+        <a class="pill" href="https://github.com/adilzubair/FindIt/releases/download/v0.1.0-preview.9/FindIt-0.1.0-preview.9-win-x64.zip">Download <span data-release-version>0.1.0-preview.9</span></a>
+        <p class="download__meta"><span data-release-size>1.7 GB</span> ZIP · <span data-release-date>23 October 2026</span></p>
+        <p class="download__links">
+          <a href="https://github.com/adilzubair/FindIt/releases/download/v0.1.0-preview.9/FindIt-0.1.0-preview.9-win-x64.zip.sha256">SHA-256</a>
+          <a href="https://github.com/adilzubair/FindIt/releases/tag/v0.1.0-preview.9">Release notes</a>
+          <a href="https://github.com/adilzubair/FindIt">Source code</a>
+          <a href="https://github.com/adilzubair/FindIt/blob/main/docs/validation.md">Validation status</a>
+        </p>
+        <p class="fine">Development preview. Extract it to the root of an external drive and open <code>FindIt.exe</code>. Not code-signed yet, so Windows may ask you to confirm.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot__row">
+      <p>Made by <a href="https://muhamedadil.com/">Muhamed Adil</a> · Also: <a href="https://scout.muhamedadil.com/">Scout</a></p>
+      <p>This page loads nothing from anywhere else. <a href="credits.html">Credits</a></p>
+    </div>
+  </footer>
+
+  <dialog class="viewer" aria-label="File preview">
+    <div class="viewer__media"></div>
+    <aside class="viewer__info">
+      <form method="dialog"><button class="viewer__close" aria-label="Close preview"><span aria-hidden="true">×</span></button></form>
+      <h2 class="viewer__name"></h2>
+      <p class="viewer__meta"></p>
+      <ul class="viewer__why"></ul>
+      <a class="viewer__original" href="#" target="_blank" rel="noopener">Open the original</a>
+    </aside>
+  </dialog>
+
+  <dialog class="tour" aria-label="FindIt tour video">
+    <form method="dialog"><button class="tour__close" aria-label="Close video"><span aria-hidden="true">×</span></button></form>
+    <video controls playsinline preload="none" poster="media/app-drive.webp" width="1920" height="1080">
+      <source src="media/findit-demo.mp4" type="video/mp4">
+    </video>
+  </dialog>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

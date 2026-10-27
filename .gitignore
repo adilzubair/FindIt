@@ -26,3 +26,8 @@ models/*.traineddata
 .idea/
 .vscode/
 *.trx
+
+# Website build output and caches (see website/README.md)
+website/_site/
+website/node_modules/
+website/.cache/
