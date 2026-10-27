@@ -72,6 +72,48 @@ internal static class ContactSheetLayout
         return rows;
     }
 
+    /// <summary>Tile widths the Small, Medium and Large thumbnail sizes aim for.</summary>
+    internal static readonly double[] ThumbnailWidths = [176, 220, 264];
+
+    /// <summary>
+    /// Columns for a thumbnail size (0 Small, 1 Medium, 2 Large). Rounding each size on its own lets
+    /// neighbouring sizes land on the same count at many window widths, so Medium keeps its natural
+    /// count and Small and Large always step one column away from it while the width allows.
+    /// </summary>
+    public static int UniformColumns(double availableWidth, int size, double gap = 8)
+    {
+        var width = double.IsFinite(availableWidth) ? Math.Max(120, availableWidth) : 120;
+        var spacing = double.IsFinite(gap) && gap >= 0 ? gap : 8;
+        int Natural(double tileWidth) => Math.Max(1, (int)Math.Round((width + spacing) / (tileWidth + spacing), MidpointRounding.AwayFromZero));
+        var medium = Natural(ThumbnailWidths[1]);
+        return Math.Clamp(size, 0, 2) switch
+        {
+            0 => Math.Max(Natural(ThumbnailWidths[0]), medium + 1),
+            2 => Math.Max(1, Math.Min(Natural(ThumbnailWidths[2]), medium - 1)),
+            _ => medium,
+        };
+    }
+
+    /// <summary>Equal tiles in a fixed number of columns. A short final row keeps the same tile size.</summary>
+    public static IReadOnlyList<ContactSheetRow> Grid(int count, double availableWidth, int columns, double aspectRatio, double gap = 8, double captionHeight = 26)
+    {
+        if (count <= 0) return [];
+        var width = double.IsFinite(availableWidth) ? Math.Max(120, availableWidth) : 120;
+        var perRow = Math.Max(1, columns);
+        var spacing = double.IsFinite(gap) && gap >= 0 ? Math.Min(gap, width / (perRow + 1)) : Math.Min(8, width / (perRow + 1));
+        var caption = double.IsFinite(captionHeight) && captionHeight >= 0 ? Math.Min(captionHeight, 120) : 26;
+        var tileWidth = (width - spacing * (perRow - 1)) / perRow;
+        var height = tileWidth / Ratio(aspectRatio);
+        var extent = height + caption + spacing;
+        var rows = new List<ContactSheetRow>((count + perRow - 1) / perRow);
+        for (var start = 0; start < count; start += perRow)
+        {
+            var items = Math.Min(perRow, count - start);
+            rows.Add(new(start, items, height, Enumerable.Repeat(tileWidth, items).ToArray(), rows.Count * extent, extent) { Gap = spacing });
+        }
+        return rows;
+    }
+
     public static int FindAnchorIndex(IReadOnlyList<ContactSheetRow> rows, double offset)
     {
         if (rows.Count == 0) return 0;

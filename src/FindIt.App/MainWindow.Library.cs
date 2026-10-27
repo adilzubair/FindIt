@@ -19,7 +19,8 @@ public partial class MainWindow
     private double _sheetWidth;
     private int _sheetVersion;
 
-    private double _targetTileWidth = 220, _inspectorWidth = 340;
+    private double _inspectorWidth = 340;
+    private int _thumbnailSize = 1;
     private bool _uiReady, _arranging, _listMode, _personInspectorOpen, _playbackSmoke;
     private int _peopleColumns;
     private bool _peopleRowsDirty;
@@ -134,7 +135,7 @@ public partial class MainWindow
     }
     private async void SearchClick(object sender, RoutedEventArgs e) { Navigate("search"); await SearchAsync(true, submitQuery: true); }
     private async void QueryKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; Navigate("search"); await SearchAsync(true, submitQuery: true); } }
-    private async void PreviousClick(object sender, RoutedEventArgs e) { if (_firstPage > 0) await SearchAsync(false, _firstPage - 1); }
+    private async void PreviousClick(object sender, RoutedEventArgs e) { if (_page > 0) await SearchAsync(false, _page - 1); }
     private async void NextClick(object sender, RoutedEventArgs e) { if (_pageCursors.Count > _page + 1) await SearchAsync(false, _page + 1); }
     private async void SearchMoreClick(object sender, RoutedEventArgs e) => await SearchDeeperAsync();
     private async Task SearchDeeperAsync()
@@ -147,7 +148,7 @@ public partial class MainWindow
     private void DensityChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_uiReady) return;
-        _targetTileWidth = DensitySelector.SelectedIndex switch { 0 => 176, 2 => 264, _ => 220 };
+        _thumbnailSize = Math.Clamp(DensitySelector.SelectedIndex, 0, 2);
         ArrangeRows(true);
     }
     private void ArrangeRows(bool force = false)
@@ -157,7 +158,7 @@ public partial class MainWindow
         try
         {
             var scroll = VisualChildren<ScrollViewer>(Gallery).FirstOrDefault();
-            var available = Math.Max(120, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - GalleryGap);
+            var available = Math.Max(120, (scroll is { ViewportWidth: > 0 } ? scroll.ViewportWidth : Gallery.ActualWidth - SystemParameters.VerticalScrollBarWidth) - GalleryGap - GalleryInset);
             if (!force && Math.Abs(available - _sheetWidth) < .5 && _sheetRows.Sum(row => row.Count) == CurrentTiles.Count && Rows.SelectMany(row => row.Tiles).SequenceEqual(CurrentTiles)) return;
             var anchor = GetGalleryAnchor();
             var focusedButton = Keyboard.FocusedElement as Button;
@@ -165,15 +166,12 @@ public partial class MainWindow
             if (focusedTile is not null && !CurrentTiles.Contains(focusedTile)) focusedTile = null;
             _sheetWidth = available;
             // A uniform 4:3 grid: thumbnails crop to fill, so rows stay calm and scannable.
-            _sheetRows = ContactSheetLayout.Arrange(Enumerable.Repeat(4d / 3, CurrentTiles.Count).ToArray(), available, _targetTileWidth * .75, GalleryGap, GalleryCaption);
-            // Keep a short final row on the same columns as the rows above it.
-            if (_sheetRows.Count > 1 && _sheetRows[^1] is { } tail && _sheetRows[0] is { } full && tail.Count < full.Count)
-                _sheetRows = [.. _sheetRows.Take(_sheetRows.Count - 1), tail with { ThumbnailHeight = full.ThumbnailHeight, Widths = Enumerable.Repeat(full.Widths[0], tail.Count).ToArray(), Extent = full.Extent }];
-            _columns = _sheetRows.FirstOrDefault()?.Count ?? 1;
+            _columns = ContactSheetLayout.UniformColumns(available, _thumbnailSize, GalleryGap);
+            _sheetRows = ContactSheetLayout.Grid(CurrentTiles.Count, available, _columns, 4d / 3, GalleryGap, GalleryCaption);
             _sheetVersion++;
-            // Rows holding the same files (most resize steps, density changes within a column count,
-            // and every full row before an appended page) are resized in place. Rebuilding recreates
-            // each tile and reloads its thumbnail, so only rows that changed are replaced.
+            // Rows holding the same files (most resize steps keep the column count) are resized in
+            // place. Rebuilding recreates each tile and reloads its thumbnail, so only rows that
+            // changed are replaced.
             var kept = 0;
             while (kept < Rows.Count && kept < _sheetRows.Count && Rows[kept].Tiles.Count == _sheetRows[kept].Count && Rows[kept].Tiles.SequenceEqual(CurrentTiles.Skip(_sheetRows[kept].Start).Take(_sheetRows[kept].Count))) kept++;
             var sameRows = kept == Rows.Count && kept == _sheetRows.Count;

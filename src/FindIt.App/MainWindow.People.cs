@@ -101,7 +101,7 @@ public partial class MainWindow
 
     private int _suggestionVersion;
     private bool _savingSuggestion;
-    // Up to twelve uncertain faces, best quality first, for a quick yes or no without the full review.
+    // Up to twelve uncertain faces, best quality first and one per moment, for a quick yes or no without the full review.
     private async Task LoadPersonSuggestionsAsync(PersonRecord? person)
     {
         var version = ++_suggestionVersion;
@@ -112,7 +112,7 @@ public partial class MainWindow
             var observations = await _backend.GetPersonObservationsAsync(person.Id);
             if (version != _suggestionVersion) return;
             var label = person.Confirmed ? person.Name : "this person";
-            var suggestions = observations.Where(o => !o.Confirmed && !o.Rejected).OrderByDescending(o => o.Quality).Take(12).Select(o => new PersonSuggestion(o, label)).ToArray();
+            var suggestions = PersonSuggestions.DistinctMoments(observations.Where(o => !o.Confirmed && !o.Rejected).OrderByDescending(o => o.Quality)).Take(12).Select(o => new PersonSuggestion(o, label)).ToArray();
             PersonSuggestionList.ItemsSource = suggestions;
             PersonSuggestionEmpty.Visibility = suggestions.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             PersonReviewHint.Text = suggestions.Length == 0 ? "Nothing waiting. Use Review all matches to change earlier answers." : $"Is this {label}? Your answers stay on this drive and make person searches more reliable.";

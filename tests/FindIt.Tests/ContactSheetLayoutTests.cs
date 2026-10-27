@@ -165,4 +165,39 @@ public class ContactSheetLayoutTests
         Assert.IsEmpty(ContactSheetLayout.Arrange([], 1000, 165));
         Assert.AreEqual(0, ContactSheetLayout.FindVerticalNeighbor([], 0, 1));
     }
+
+    [TestMethod]
+    public void EveryThumbnailSizeChangesTheColumnCountAtOrdinaryWidths()
+    {
+        // 970 is the default 1400 px window with the folder pane, where Large used to match Medium.
+        foreach (var width in new[] { 560d, 785, 970, 1240, 1600, 2400 })
+        {
+            int small = ContactSheetLayout.UniformColumns(width, 0, 12), medium = ContactSheetLayout.UniformColumns(width, 1, 12), large = ContactSheetLayout.UniformColumns(width, 2, 12);
+            Assert.IsTrue(small > medium && medium > large, $"{width}: {small}/{medium}/{large}");
+        }
+        Assert.AreEqual(4, ContactSheetLayout.UniformColumns(970, 1, 12));
+        Assert.AreEqual(3, ContactSheetLayout.UniformColumns(970, 2, 12));
+        // The narrowest gallery cannot step below one column.
+        Assert.AreEqual(1, ContactSheetLayout.UniformColumns(120, 2, 12));
+        Assert.AreEqual(1, ContactSheetLayout.UniformColumns(double.NaN, 1, 12));
+    }
+
+    [TestMethod]
+    public void UniformGridFillsTheWidthAndKeepsTheShortFinalRowOnTheSameColumns()
+    {
+        var rows = ContactSheetLayout.Grid(10, 970, 4, 4d / 3, 12, 44);
+        Assert.HasCount(3, rows);
+        Assert.AreEqual(2, rows[^1].Count);
+        var tileWidth = (970 - 3 * 12) / 4d;
+        foreach (var row in rows)
+        {
+            Assert.IsTrue(row.Widths.All(width => Math.Abs(width - tileWidth) < 1e-9));
+            Assert.AreEqual(tileWidth * .75, row.ThumbnailHeight, 1e-9);
+            Assert.AreEqual(row.ThumbnailHeight + 44 + 12, row.Extent, 1e-9);
+        }
+        Assert.AreEqual(rows[1].Extent * 2, rows[2].Offset, 1e-9);
+        Assert.AreEqual(8, rows[2].Start);
+        Assert.IsEmpty(ContactSheetLayout.Grid(0, 970, 4, 4d / 3));
+        Assert.HasCount(10, ContactSheetLayout.Grid(10, 970, 0, 4d / 3));
+    }
 }
