@@ -6,3 +6,4 @@
 *.ico -text
 *.mp4 -text
 *.webp -text
+*.woff2 -text

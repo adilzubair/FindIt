@@ -26,3 +26,6 @@ models/*.traineddata
 .idea/
 .vscode/
 *.trx
+
+# Assembled website (node website/build.mjs)
+website/_site/

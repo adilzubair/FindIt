@@ -16,6 +16,12 @@
 </p>
 
 <p align="center">
+  <a href="https://findit.muhamedadil.com/"><strong>Website</strong></a>
+  &nbsp;·&nbsp; <a href="https://github.com/adilzubair/FindIt/releases">Download</a>
+  &nbsp;·&nbsp; <a href="docs/validation.md">Validation status</a>
+</p>
+
+<p align="center">
   <a href="docs/media/findit-demo.mp4"><img src="docs/media/findit-demo.webp" alt="FindIt demo: a search for &quot;dog running on the beach&quot; finds the right photos, then a video moment, a voice memo, an invoice number inside a PDF and the drive page" width="880" /></a>
   <br />
   <sub>A 38-second tour of the real app. <a href="docs/media/findit-demo.mp4">Watch it with sound</a> · <a href="docs/media/CREDITS.md">media credits</a></sub>
@@ -110,6 +116,7 @@ See [development](docs/development.md) for the managed-only workflow, test harne
 - [People evidence and media timing](docs/people-evidence.md)
 - [Scale benchmark](docs/scale-benchmark.md), [recovery validation](docs/recovery-validation.md), [drive validation](docs/drive-validation.md)
 - [Changelog](CHANGELOG.md)
+- [Website](website/README.md): the source of findit.muhamedadil.com and how it deploys
 
 ## Contributing
 
