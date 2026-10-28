@@ -122,17 +122,28 @@ public sealed partial class ArchiveService
             }
             var ranks = new Dictionary<long, RankedSegment>();
             bool canSearchDeeper = false;
-            var lexical = LexicalTerms(query);
-            var tokens = lexical.Select(t => t.Text).ToArray();
-            string match = string.Join(request.Filters.ExactOnly ? " AND " : " OR ", lexical.Select(t => "\"" + t.Text.Replace("\"", "\"\"") + "\"" + (t.Phrase ? "" : "*")));
+            var lexical = QueryTerms.Parse(query);
+            string match = string.Join(request.Filters.ExactOnly ? " AND " : " OR ", lexical.Select(t => "\"" + t.Text.Replace("\"", "\"\"") + "\"" + (t.Prefix ? "*" : "")));
+            // Every keyword hit used to outrank the closest match by meaning, so a recording that says "boat" beat the video
+            // of dolphins beside one. With three or more words, a hit ranks only if its name, path or text holds most of the
+            // meaningful ones; weaker hits follow everything ranked, in keyword order. Exact words requires all of them anyway.
+            var described = request.Filters.ExactOnly ? [] : lexical.Select(t => (Words: Words(t.Text), t.Prefix, Generic: !t.Phrase && GenericWords.Contains(t.Text))).Where(t => t.Words.Length > 0).ToArray();
+            var meaningful = described.Where(t => !t.Generic).Select(t => (t.Words, t.Prefix)).ToArray();
+            bool weigh = described.Length >= 3 && meaningful.Length > 0;
             if (!string.IsNullOrWhiteSpace(match))
             {
                 using var command = db.CreateCommand();
-                command.CommandText = $"SELECT s.id,bm25(search_fts,0,0,5,2,1) FROM search_fts JOIN segments s ON s.id=CAST(search_fts.segment_id AS INTEGER) JOIN files f ON f.id=s.file_id WHERE search_fts MATCH $match AND {predicates.Sql} ORDER BY 2,s.id LIMIT $limit;";
+                command.CommandText = $"SELECT s.id,bm25(search_fts,0,0,5,2,1){(weigh ? ",f.path,s.text" : "")} FROM search_fts JOIN segments s ON s.id=CAST(search_fts.segment_id AS INTEGER) JOIN files f ON f.id=s.file_id WHERE search_fts MATCH $match AND {predicates.Sql} ORDER BY 2,s.id LIMIT $limit;";
                 command.Parameters.AddWithValue("$match", match); command.Parameters.AddWithValue("$limit", candidates); AddParameters(command, predicates.Parameters);
-                using var reader = command.ExecuteReader(); int rank = 0;
-                while (reader.Read()) { var id = reader.GetInt64(0); ranks[id] = new RankedSegment(id) { Score = 1.0 / (60 + ++rank), Exact = true }; }
-                canSearchDeeper |= rank == candidates;
+                using var reader = command.ExecuteReader(); int rank = 0, weak = 0;
+                while (reader.Read())
+                {
+                    cancellationToken.ThrowIfCancellationRequested(); var id = reader.GetInt64(0);
+                    ranks[id] = !weigh || 2 * Covered(meaningful, reader.GetString(2), reader.GetString(3)) > meaningful.Length
+                        ? new RankedSegment(id) { Score = 1.0 / (60 + ++rank), Exact = true }
+                        : new RankedSegment(id) { Score = 1.0 / (60 + candidates + ++weak), Exact = true, Weak = true };
+                }
+                canSearchDeeper |= rank + weak == candidates;
             }
             if (query.Length > 0)
             {
@@ -141,7 +152,7 @@ public sealed partial class ArchiveService
                 filename.CommandText = $"SELECT s.id FROM files f JOIN segments s ON s.file_id=f.id WHERE (f.path LIKE $path ESCAPE '\\') AND {predicates.Sql} GROUP BY f.id ORDER BY f.path LIMIT $limit;";
                 filename.Parameters.AddWithValue("$path", "%" + EscapeLike(query) + "%"); filename.Parameters.AddWithValue("$limit", candidates); AddParameters(filename, predicates.Parameters);
                 using var files = filename.ExecuteReader(); int rank = 0;
-                while (files.Read()) { long id = files.GetInt64(0); if (!ranks.TryGetValue(id, out var item)) ranks[id] = item = new RankedSegment(id); item.Score += 2.0 / (60 + ++rank); item.Exact = true; }
+                while (files.Read()) { long id = files.GetInt64(0); if (!ranks.TryGetValue(id, out var item)) ranks[id] = item = new RankedSegment(id); item.Add(2.0 / (60 + ++rank)); item.Exact = true; }
                 canSearchDeeper |= rank == candidates;
             }
             bool semanticUsed = false; string notice = "";
@@ -198,7 +209,7 @@ public sealed partial class ArchiveService
                         foreach (var neighbor in neighbors)
                         {
                             if (!ranks.TryGetValue(neighbor.Id, out var item)) ranks[neighbor.Id] = item = new RankedSegment(neighbor.Id);
-                            item.Score += 1.0 / (60 + ++rank); item.Semantic = true;
+                            item.Add(1.0 / (60 + ++rank)); item.Semantic = true;
                         }
                         canSearchDeeper |= neighbors.Count == candidates;
                         semanticUsed = true;
@@ -225,7 +236,7 @@ public sealed partial class ArchiveService
             if (ambiguous.Count > 0) notice = $"Multiple people use the name {string.Join(", ", ambiguous.Distinct(StringComparer.OrdinalIgnoreCase))}. Select a person filter to resolve the name. " + notice;
             if (query.Length == 0)
             {
-                var results = HydrateSearchFiles(db, ordered.Take(limit), tokens, personIds, people, false, cancellationToken);
+                var results = HydrateSearchFiles(db, ordered.Take(limit), lexical, personIds, people, false, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (ReadSearchRevision() != revision) return RestartSearch(generation.GenerationId, "People metadata changed. Run the search again.");
                 return new SearchResponse { GenerationId = generation.GenerationId, Results = results,
@@ -235,7 +246,7 @@ public sealed partial class ArchiveService
             // Leave room for bounded token/name/notice provenance, including unusually long paths/names.
             long retained = 64 * 1024;
             var bounded = ordered.TakeWhile(f => (retained += f.EstimatedBytes) <= SearchSessionCache.MaximumBytes).ToArray();
-            var created = new SearchSession { Binding = binding, Files = bounded, Tokens = tokens, PersonIds = personIds,
+            var created = new SearchSession { Binding = binding, Files = bounded, Tokens = lexical, PersonIds = personIds,
                 People = detected.Select(p => new PersonChip(p.Id, p.Name)).ToArray(), Notice = notice,
                 SemanticUsed = semanticUsed, CanSearchDeeper = candidates < 16384 && (canSearchDeeper || bounded.Length != ordered.Length), RetrievalBudget = candidates };
             var response = SessionPage(db, created, generation.GenerationId, people, 0, limit, watch, cancellationToken);
@@ -369,29 +380,59 @@ public sealed partial class ArchiveService
         Thumbnail = reader.IsDBNull(start + 6) ? null : Blob(reader.GetString(start + 6)),
         Label = !reader.IsDBNull(start + 5) ? "Page " + reader.GetInt32(start + 5) : !reader.IsDBNull(start + 3) ? TimeSpan.FromMilliseconds(reader.GetInt64(start + 3)).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) : ((SegmentKind)reader.GetInt32(start + 1)).ToString()
     };
-    private static string Snippet(string text, string[] tokens)
+    // Centres on the passage holding the most distinct query words, then the longest ones, matched where words start as the
+    // search matches them, so "get" no longer lands inside "together". Text no term matches that way keeps the earliest substring.
+    internal static string Snippet(string text, QueryTerm[] terms)
     {
         if (text.Length <= 260) return text;
-        int first = tokens.Select(t => text.IndexOf(t, StringComparison.OrdinalIgnoreCase)).Where(i => i >= 0).DefaultIfEmpty(0).Min(); int start = Math.Max(0, first - 50);
+        var hits = terms.Select(t => (t.Text.Length, Pattern: QueryTerms.Pattern(t))).Where(t => t.Pattern is not null)
+            .SelectMany((t, term) => Regex.Matches(text, t.Pattern!, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Select(m => (m.Index, Term: term, t.Length))).OrderBy(h => h.Index).ToArray();
+        int first = hits.Length == 0 ? terms.Select(t => text.IndexOf(t.Text, StringComparison.OrdinalIgnoreCase)).Where(i => i >= 0).DefaultIfEmpty(0).Min()
+            : hits.Select((h, i) => (h.Index, Near: hits.Skip(i).TakeWhile(n => n.Index < h.Index + 200).DistinctBy(n => n.Term).ToArray())).MaxBy(w => (w.Near.Length, w.Near.Sum(n => n.Length))).Index;
+        int start = Math.Max(0, first - 50);
         return (start > 0 ? "…" : "") + text.Substring(start, Math.Min(260, text.Length - start)) + "…";
     }
-    private static readonly HashSet<string> EnglishStopWords = new(StringComparer.OrdinalIgnoreCase)
+    // Light verbs and adverbial particles carry a request's grammar ("get my deposit back"), not its subject. They still match,
+    // but do not count among the words a keyword hit must hold to rank above matches by meaning.
+    private static readonly HashSet<string> GenericWords = new(StringComparer.OrdinalIgnoreCase) { "again","away","back","down","get","gets","getting","go","goes","going","got","off","out","went" };
+    // Words as the catalog's FTS5 tokenizer (unicode61, remove_diacritics) sees them: runs of letters, numbers and
+    // private-use characters, case-folded, with accents and other combining marks dropped.
+    internal static string[] Words(string text)
     {
-        "a","an","and","are","as","at","be","been","being","but","by","can","could","did","do","does","for","from","had","has","have","how","i","if","in","into","is","it","its","me","my","of","on","or","our","over","s","she","some","someone","something","than","that","the","their","them","then","there","these","they","this","those","to","under","up","us","was","we","were","what","when","where","which","who","why","will","with","would","you","your"
-    };
-    private static (string Text, bool Phrase)[] LexicalTerms(string query)
-    {
-        var result = new List<(string Text, bool Phrase)>();
-        foreach (Match token in Regex.Matches(query, "\"(?<phrase>[^\"]+)\"|(?<token>[\\p{L}\\p{N}_]+)", RegexOptions.CultureInvariant))
+        var words = new List<string>(); var word = new StringBuilder();
+        text = text.Normalize(NormalizationForm.FormD).ToLowerInvariant();
+        for (int i = 0; i < text.Length; i++)
         {
-            bool phrase = token.Groups["phrase"].Success;
-            string value = phrase ? token.Groups["phrase"].Value.Trim() : token.Groups["token"].Value;
-            if (value.Length == 0 || !phrase && (EnglishStopWords.Contains(value) || value.Length == 1 && char.IsLetter(value[0]))) continue;
-            result.Add((value, phrase)); if (result.Count == 48) break;
+            var category = CharUnicodeInfo.GetUnicodeCategory(text, i); bool pair = char.IsSurrogatePair(text, i);
+            if (category is <= UnicodeCategory.OtherLetter or >= UnicodeCategory.DecimalDigitNumber and <= UnicodeCategory.OtherNumber or UnicodeCategory.PrivateUse) word.Append(text, i, pair ? 2 : 1);
+            else if (category != UnicodeCategory.NonSpacingMark && word.Length > 0) { words.Add(word.ToString()); word.Clear(); }
+            if (pair) i++;
         }
-        return result.Distinct().ToArray();
+        if (word.Length > 0) words.Add(word.ToString());
+        return [.. words];
     }
-    private sealed class RankedSegment(long id) { public long Id { get; } = id; public double Score; public bool Exact; public bool Semantic; }
+    // How many terms occur in any column, with FTS5's meaning: a phrase's words in order, the last one as a prefix if marked.
+    internal static int Covered((string[] Words, bool Prefix)[] terms, params string[] columns)
+    {
+        var tokenized = columns.Select(Words).ToArray();
+        return terms.Count(term => tokenized.Any(words =>
+        {
+            for (int start = 0, last = term.Words.Length - 1; start + last < words.Length; start++)
+            {
+                int i = 0; while (i < last && words[start + i] == term.Words[i]) i++;
+                if (i == last && (term.Prefix ? words[start + i].StartsWith(term.Words[i], StringComparison.Ordinal) : words[start + i] == term.Words[i])) return true;
+            }
+            return false;
+        }));
+    }
+    private sealed class RankedSegment(long id)
+    {
+        public long Id { get; } = id; public double Score; public bool Exact; public bool Semantic;
+        // A keyword hit holding too few of the query's words. It orders only what nothing else ranked,
+        // so a match by meaning or by filename replaces its score and reports itself.
+        public bool Weak;
+        public void Add(double score) { if (Weak) { Score = 0; Exact = Weak = false; } Score += score; }
+    }
 
     public async Task<PreviewResult> GetPreviewAsync(PreviewRequest request, CancellationToken cancellationToken = default)
     {

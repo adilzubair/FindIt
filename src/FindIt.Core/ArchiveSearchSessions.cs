@@ -57,7 +57,7 @@ public sealed partial class ArchiveService
             .Select(p => new FrozenSearchFile(p.Key, p.Value.Best.Score, p.Value.Best.Exact, p.Value.Best.Semantic, p.Value.Segments.ToArray())).ToArray();
     }
 
-    private SearchResult[] HydrateSearchFiles(SqliteConnection db, IEnumerable<FrozenSearchFile> files, string[] tokens,
+    private SearchResult[] HydrateSearchFiles(SqliteConnection db, IEnumerable<FrozenSearchFile> files, QueryTerm[] tokens,
         Guid[] personIds, IReadOnlyList<PersonRecord> people, bool ranked, CancellationToken token)
     {
         var results = new List<SearchResult>();
