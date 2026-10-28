@@ -741,9 +741,9 @@ public partial class MainWindow : Window
         PreviewText.Inlines.Clear();
         PreviewText.Visibility = string.IsNullOrWhiteSpace(_previewPlainText) ? Visibility.Collapsed : Visibility.Visible;
         if (_previewPlainText.Length == 0) return;
-        var terms = _submittedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Where(term => term.Length >= 3).Select(System.Text.RegularExpressions.Regex.Escape).ToArray();
-        if (terms.Length == 0) { PreviewText.Inlines.Add(new System.Windows.Documents.Run(_previewPlainText)); return; }
-        var pattern = new System.Text.RegularExpressions.Regex(string.Join("|", terms), System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
+        // The words keyword search matched, where words start, without the stop words it ignores.
+        var pattern = QueryTerms.Highlighter(_submittedQuery);
+        if (pattern is null) { PreviewText.Inlines.Add(new System.Windows.Documents.Run(_previewPlainText)); return; }
         var position = 0;
         try
         {

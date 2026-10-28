@@ -8,6 +8,11 @@ All notable changes to FindIt are recorded here. The format follows [Keep a Chan
 
 - A new demo video in the README and on the website: four searches recorded live from the app on a generated demo drive (a moment in a video, photos, a sentence in a voice memo, a clause in a scanned contract). [`demo-video/`](demo-video/README.md) builds the drive, records the takes and edits them, so the video can be re-recorded when the interface changes ([credits](docs/media/CREDITS.md)).
 
+### Fixed
+
+- Describing a photo or video ("hot air balloons", "dolphins swimming beside the boat") finds it first again, instead of documents and voice memos that share one of its words. A document still comes first when it holds most of what you typed, and codes, file names, quoted phrases and **Exact words** work as before. Short words no longer match longer ones ("hot" found "hotel") unless they are the word you are still typing.
+- Result snippets and the preview's highlights mark the searched words only where words start and skip ignored words such as "when", so "get" is no longer marked inside "together".
+
 ## [0.1.0-preview.10] - 2026-10-27
 
 ### Added
