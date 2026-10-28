@@ -56,7 +56,7 @@ class Downloads:
                 sys.exit(f"{key} is not pinned in lock.json. Run with --update-lock to record it.")
             self.lock[key] = digest
         elif expected != digest:
-            path.rename(path.with_suffix(path.suffix + ".rejected"))
+            path.replace(path.with_suffix(path.suffix + ".rejected"))  # replace, not rename: an earlier .rejected may be there
             sys.exit(f"SHA-256 mismatch for {key}: expected {expected}, got {digest}")
         return path
 

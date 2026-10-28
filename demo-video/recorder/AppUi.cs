@@ -65,11 +65,8 @@ internal sealed class AppUi(AutomationElement root, bool realInput)
         }
     }
 
-    private void Submit()
-    {
-        if (realInput) { Log?.Add("key", "Enter"); Win32.Press(0x0D); return; }
-        Press(Find("HeroSearchButton"), "HeroSearchButton");
-    }
+    // Both inputs press the search button, so every take logs the "click:HeroSearchButton" the edit cuts on.
+    private void Submit() => Press(Find("HeroSearchButton"), "HeroSearchButton");
 
     private void WaitForResults(int timeoutMs)
     {
@@ -77,7 +74,8 @@ internal sealed class AppUi(AutomationElement root, bool realInput)
         Log?.Mark("results", Tiles().Take(12).Select((t, i) => ($"tile{i}:{t.Current.Name}", t.Current.BoundingRectangle)).ToArray());
     }
 
-    private IEnumerable<AutomationElement> Tiles() => Find("Gallery")
+    // Empty until the results view exists, so the waits above keep polling instead of failing.
+    private IEnumerable<AutomationElement> Tiles() => TryFind("Gallery") is not { } gallery ? [] : gallery
         .FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)).Cast<AutomationElement>()
         .Where(e => e.Current.Name.EndsWith("Open preview.", StringComparison.Ordinal) && !e.Current.IsOffscreen);
 
@@ -91,7 +89,7 @@ internal sealed class AppUi(AutomationElement root, bool realInput)
     private IEnumerable<AutomationElement> Moments()
     {
         AutomationElement[] items = [];
-        WaitUntil(() => (items = Find("MomentsList").FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)).Cast<AutomationElement>().ToArray()).Length > 0,
+        WaitUntil(() => (items = TryFind("MomentsList")?.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)).Cast<AutomationElement>().ToArray() ?? []).Length > 0,
             TimeSpan.FromSeconds(10), "matching moments");
         return items;
     }

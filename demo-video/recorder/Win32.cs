@@ -86,11 +86,6 @@ internal static partial class Win32
         Send([Key(0, c, 0x0004), Key(0, c, 0x0004 | 0x0002)]); // KEYEVENTF_UNICODE, then key up
     }
 
-    public static void Press(ushort virtualKey)
-    {
-        Send([Key(virtualKey, '\0', 0), Key(virtualKey, '\0', 0x0002)]);
-    }
-
     private static void Send(Input[] inputs)
     {
         if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>()) != inputs.Length) throw new InvalidOperationException("Windows rejected synthetic input.");

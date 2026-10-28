@@ -33,13 +33,19 @@ type Seg = { from: number; to: number; speed: number; start: number; end: number
 const ease = Easing.bezier(0.6, 0, 0.25, 1);
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const blend = (a: Placed, b: Placed, p: number): Placed => ({
+  scale: Math.exp(lerp(Math.log(a.scale), Math.log(b.scale), p)),
+  fx: lerp(a.fx, b.fx, p), fy: lerp(a.fy, b.fy, p),
+  tx: lerp(a.tx, b.tx, p), ty: lerp(a.ty, b.ty, p),
+  clip: { x: lerp(a.clip.x, b.clip.x, p), y: lerp(a.clip.y, b.clip.y, p), w: lerp(a.clip.w, b.clip.w, p), h: lerp(a.clip.h, b.clip.h, p) },
+});
 
 /** One recorded take, cut, sped up and framed. Frames are output frames from the shot's start. */
 export class Shot {
   readonly take: Take;
   readonly segments: Seg[];
   readonly durationInFrames: number;
-  private readonly keys: { frame: number; frames: number; view: Placed }[];
+  private readonly keys: { frame: number; frames: number; start: Placed; view: Placed }[];
   private readonly clicks: { frame: number; x: number; y: number }[];
   private readonly moves: { depart: number; arrive: number; from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
   private readonly restStart: { x: number; y: number };
@@ -55,7 +61,13 @@ export class Shot {
       return seg;
     });
     this.durationInFrames = Math.round(cursor);
-    this.keys = spec.camera.map((k) => ({ frame: this.frameAt(at(this.take, k.at)), frames: ((k.ms ?? 750) / 1000) * FPS, view: this.place(k) }));
+    // Each move starts from wherever the camera is when its key arrives, even if the previous move has not finished.
+    this.keys = [];
+    for (const k of spec.camera) {
+      const frame = this.frameAt(at(this.take, k.at)), view = this.place(k), last = this.keys[this.keys.length - 1];
+      const start = last ? blend(last.start, last.view, ease(clamp01((frame - last.frame) / last.frames))) : view;
+      this.keys.push({ frame, frames: ((k.ms ?? 750) / 1000) * FPS, start, view });
+    }
     this.clicks = this.take.events
       .filter((e) => (e.type === "click" || e.type === "focus") && e.rect)
       .map((e) => ({ frame: this.frameAt(e.t), x: e.rect![0] + e.rect![2] / 2, y: e.rect![1] + e.rect![3] / 2 }))
@@ -105,14 +117,7 @@ export class Shot {
     let i = this.keys.findLastIndex((k) => k.frame <= frame);
     if (i < 0) i = 0;
     const k = this.keys[i];
-    const prev = this.keys[Math.max(0, i - 1)].view;
-    const p = i === 0 ? 1 : ease(clamp01((frame - k.frame) / k.frames));
-    return {
-      scale: Math.exp(lerp(Math.log(prev.scale), Math.log(k.view.scale), p)),
-      fx: lerp(prev.fx, k.view.fx, p), fy: lerp(prev.fy, k.view.fy, p),
-      tx: lerp(prev.tx, k.view.tx, p), ty: lerp(prev.ty, k.view.ty, p),
-      clip: { x: lerp(prev.clip.x, k.view.clip.x, p), y: lerp(prev.clip.y, k.view.clip.y, p), w: lerp(prev.clip.w, k.view.clip.w, p), h: lerp(prev.clip.h, k.view.clip.h, p) },
-    };
+    return blend(k.start, k.view, i === 0 ? 1 : ease(clamp01((frame - k.frame) / k.frames)));
   }
 
   /** Where the pointer is, in take pixels, how pressed it looks (0–1) and the click ripple's progress (0–1, or −1). */

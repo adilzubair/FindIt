@@ -1,5 +1,6 @@
 import { AbsoluteFill, Audio, Freeze, Img, interpolate, OffthreadVideo, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import { FPS } from "../engine/shot";
+import { at, getTake } from "../engine/takes";
 import { color, font } from "../theme";
 import { Caption } from "./Caption";
 import { Cursor } from "./Cursor";
@@ -7,9 +8,9 @@ import { Cursor } from "./Cursor";
 const SCREEN = { w: 720, h: 450 };
 const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const;
 
-/** A frozen frame of a take, used as a laptop's screen. */
-const Still: React.FC<{ take: string; ms: number }> = ({ take, ms }) => (
-  <Freeze frame={Math.round((ms / 1000) * FPS)}>
+/** A frozen frame of a take at a logged moment (see `at`), used as a laptop's screen. */
+const Still: React.FC<{ take: string; moment: string }> = ({ take, moment }) => (
+  <Freeze frame={Math.round((at(getTake(take), moment) / 1000) * FPS)}>
     <OffthreadVideo src={staticFile(`takes/${take}.mp4`)} muted style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top left" }} />
   </Freeze>
 );
@@ -60,7 +61,7 @@ export const DriveScene: React.FC<{ durationInFrames: number }> = ({ durationInF
       <div style={{ position: "absolute", inset: 0, transform: `translateY(${(1 - enter) * 40}px)`, opacity: enter }}>
         <Laptop x={left.x} y={left.y} glow={screenA}>
           <div style={{ position: "absolute", inset: 0, opacity: screenA }}>
-            <Still take="01-dolphins" ms={9200} />
+            <Still take="01-dolphins" moment="click:open+375" />
           </div>
           <div style={{ position: "absolute", inset: 0, background: "radial-gradient(400px 260px at 30% 20%, #16335E, #070D1C 75%)", opacity: 1 - screenA }} />
         </Laptop>
@@ -72,7 +73,7 @@ export const DriveScene: React.FC<{ durationInFrames: number }> = ({ durationInF
             </div>
             {frame < 200 && <Cursor x={pointerB.x} y={pointerB.y} press={press} ripple={frame >= 186 && frame < 206 ? (frame - 186) / 20 : -1} opacity={interpolate(frame, [146, 156], [0, 1], clamp)} />}
             <div style={{ position: "absolute", inset: 0, transformOrigin: `${icon.x}px ${icon.y}px`, transform: `scale(${0.08 + 0.92 * open})`, opacity: open, borderRadius: 6, overflow: "hidden" }}>
-              <Still take="02-balloons" ms={900} />
+              <Still take="02-balloons" moment="focus-330" />
             </div>
           </div>
         </Laptop>

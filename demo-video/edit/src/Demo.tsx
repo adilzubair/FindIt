@@ -20,10 +20,8 @@ const typing = (lead: number, speed: number) => [
 const dolphins = new Shot({
   take: "01-dolphins",
   segments: [
-    { from: "start", to: "focus-500", speed: 1 },
-    { from: "focus-500", to: "type:first" },
-    { from: "type:first", to: "type:last+120", speed: 2.1 },
-    { from: "type:last+120", to: "click:HeroSearchButton+60" },
+    { from: "start", to: "focus-500" },
+    ...typing(500, 2.1),
     { from: "click:HeroSearchButton+60", to: "mark:results+450" },
     { from: "mark:results+450", to: "click:open-600", speed: 1.8 },
     { from: "click:open-600", to: "mark:preview+3900" },

@@ -9,7 +9,13 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
-const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : fallback; };
+const arg = (name, fallback) => {
+  const i = process.argv.indexOf(name);
+  if (i < 0) return fallback;
+  const value = process.argv[i + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`${name} needs a folder.`);
+  return value;
+};
 const takes = resolve(arg("--takes", join(home, "FindItDemo", "takes")));
 const drive = resolve(arg("--drive", join(home, "FindItDemo", "Portable SSD")));
 const cache = resolve(arg("--cache", join(home, "FindItDemo", "cache", "edit")));

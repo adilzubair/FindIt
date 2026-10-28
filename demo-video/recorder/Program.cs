@@ -20,7 +20,7 @@ if (Option("--app") is not { } app || Option("--drive") is not { } drive || Opti
     return 2;
 }
 var realInput = (Option("--input") ?? "uia") == "real";
-var ffmpeg = Option("--ffmpeg") ?? Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "runtime", "tools", "ffmpeg.exe");
+var ffmpeg = Option("--ffmpeg") ?? Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "runtime", "tools", "ffmpeg.exe"); // bin/<config>/<tfm> → repo root
 if (!File.Exists(ffmpeg)) { Console.Error.WriteLine($"ffmpeg not found at {ffmpeg}; pass --ffmpeg."); return 2; }
 drive = Path.GetFullPath(drive);
 if (!File.Exists(Path.Combine(drive, ".findit-demo-drive"))) { Console.Error.WriteLine($"{drive} is not a generated demo drive."); return 2; }
