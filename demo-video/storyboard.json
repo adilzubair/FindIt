@@ -1,0 +1,73 @@
+{
+  "comment": "The searches the demo shows. 'DemoDrive check' runs 'searches' against the prepared demo drive; the recorder plays 'takes' in the real app.",
+  "window": { "width": 1440, "height": 900, "x": 40, "y": 24 },
+  "searches": [
+    { "query": "dolphins swimming beside the boat", "expectFirst": "Videos/GX010274.MP4" },
+    { "query": "hot air balloons at sunrise" },
+    { "query": "what time is the last ferry back", "expectFirst": "Voice memos/Recording 14.m4a" },
+    { "query": "when do I get my deposit back", "expectFirst": "Documents/Home/Tenancy agreement - signed.pdf" }
+  ],
+  "takes": [
+    {
+      "name": "01-dolphins",
+      "steps": [
+        { "do": "hold", "ms": 500 },
+        { "do": "type", "into": "HeroQueryBox", "text": "dolphins swimming beside the boat" },
+        { "do": "hold", "ms": 350 },
+        { "do": "submit" },
+        { "do": "results" },
+        { "do": "hold", "ms": 1400 },
+        { "do": "open", "name": "GX010274.MP4" },
+        { "do": "hold", "ms": 1200 },
+        { "do": "mark", "label": "preview", "elements": ["PreviewName", "Close preview", "MomentsList", "PlaybackTimeline", "Play playback", "OpenOriginalButton"] },
+        { "do": "hold", "ms": 7000 }
+      ]
+    },
+    {
+      "name": "02-balloons",
+      "steps": [
+        { "do": "hold", "ms": 500 },
+        { "do": "type", "into": "HeroQueryBox", "text": "hot air balloons at sunrise" },
+        { "do": "hold", "ms": 350 },
+        { "do": "submit" },
+        { "do": "results" },
+        { "do": "hold", "ms": 4000 }
+      ]
+    },
+    {
+      "name": "03-ferry",
+      "steps": [
+        { "do": "hold", "ms": 500 },
+        { "do": "type", "into": "HeroQueryBox", "text": "what time is the last ferry back" },
+        { "do": "hold", "ms": 350 },
+        { "do": "submit" },
+        { "do": "results" },
+        { "do": "hold", "ms": 1000 },
+        { "do": "open", "name": "Recording 14" },
+        { "do": "hold", "ms": 1200 },
+        { "do": "mark", "label": "preview", "elements": ["PreviewName", "Close preview", "MomentsList", "PreviewText", "OpenOriginalButton"] },
+        { "do": "moment", "index": 0 },
+        { "do": "hold", "ms": 7000 }
+      ]
+    },
+    {
+      "name": "04-deposit",
+      "steps": [
+        { "do": "hold", "ms": 500 },
+        { "do": "type", "into": "HeroQueryBox", "text": "when do I get my deposit back" },
+        { "do": "hold", "ms": 350 },
+        { "do": "submit" },
+        { "do": "results" },
+        { "do": "hold", "ms": 1000 },
+        { "do": "open", "name": "Tenancy agreement" },
+        { "do": "hold", "ms": 1200 },
+        { "do": "mark", "label": "preview", "elements": ["PreviewName", "Close preview", "MomentsList", "PreviewText", "OpenOriginalButton"] },
+        { "do": "hold", "ms": 900 },
+        { "do": "scroll", "target": "PreviewText", "percent": 88 },
+        { "do": "hold", "ms": 600 },
+        { "do": "mark", "label": "text", "elements": ["PreviewName", "Close preview", "PreviewText", "OpenOriginalButton"] },
+        { "do": "hold", "ms": 4000 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "comment": "Voice memos spoken by Kokoro-82M (Apache-2.0). Fictional.",
+  "memos": [
+    {
+      "path": "Voice memos/Recording 14.m4a", "date": "2025-08-11T22:14", "voice": "af_heart", "speed": 1.0,
+      "text": "Okay, quick note for tomorrow. The ferry to the island leaves at nine fifteen from the main pier, and the last ferry back leaves at seven forty. So, no sunset dinner on the island this time. Oh, and bring cash. They don't take cards on the boat."
+    },
+    {
+      "path": "Voice memos/Recording 9.m4a", "date": "2025-07-02T08:41", "voice": "am_michael", "speed": 1.0,
+      "text": "Called the garage about the car. They can take it on Thursday morning. The front brake pads are down to about twenty percent, so they'll replace those, and the whole service should come to around three hundred and forty euros, including the oil change."
+    },
+    {
+      "path": "Voice memos/Recording 17.m4a", "date": "2025-10-05T13:02", "voice": "af_heart", "speed": 1.0,
+      "text": "Gift idea for Dad's birthday. That walking guide to the Norwegian fjords we saw in the bookshop near the station. The hardback one, with the blue cover. And maybe a framed print of the northern lights photo from the cabin."
+    },
+    {
+      "path": "Voice memos/Recording 21.m4a", "date": "2026-01-19T17:36", "voice": "bm_george", "speed": 1.0,
+      "text": "Notes from the call with the design team. They want the onboarding cut down to three steps, no account creation at all, and the beta out to twenty testers before the end of February. I owe them the copy by Friday."
+    },
+    {
+      "path": "Voice memos/Recording 23.m4a", "date": "2026-03-08T10:12", "voice": "af_heart", "speed": 1.0,
+      "text": "Restaurant tip from the hotel. There's a tiny place behind the cathedral that does grilled sardines. No sign outside, just a green door. Get there before seven, or there's a queue down the street."
+    },
+    {
+      "path": "Voice memos/Recording 25.m4a", "date": "2026-06-14T18:20", "voice": "am_michael", "speed": 1.0,
+      "text": "Shopping list. Flour, eggs, two lemons, butter, icing sugar for the cake, and coffee beans. The medium roast, not the dark one."
+    }
+  ]
+}

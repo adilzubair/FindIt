@@ -22,9 +22,9 @@
 </p>
 
 <p align="center">
-  <a href="docs/media/findit-demo.mp4"><img src="docs/media/findit-demo.webp" alt="FindIt demo: a search for &quot;dog running on the beach&quot; finds the right photos, then a video moment, a voice memo, an invoice number inside a PDF and the drive page" width="880" /></a>
+  <a href="docs/media/findit-demo.mp4"><img src="docs/media/findit-demo.webp" alt="FindIt demo: plain-language searches find the moment dolphins swim beside a boat in a long video, photos of hot air balloons at sunrise, the sentence about the last ferry in a voice memo, and the deposit clause in a scanned tenancy agreement" width="880" /></a>
   <br />
-  <sub>A 38-second tour of the real app. <a href="docs/media/findit-demo.mp4">Watch it with sound</a> · <a href="docs/media/CREDITS.md">media credits</a></sub>
+  <sub>A 47-second tour of the real app, recorded live. <a href="docs/media/findit-demo.mp4">Watch it with sound</a> · <a href="demo-video/README.md">how it is made</a> · <a href="docs/media/CREDITS.md">media credits</a></sub>
 </p>
 
 Prepare an external drive once on a capable Windows PC. Then plug it into any other Windows PC and search everything on it — by filename, by the exact words inside a document, or by meaning ("red bicycle in a forest", "someone speaking about invoices") — with no installation, no internet connection and no cloud account.

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Prepares the demo drive and checks the storyboard's searches against it. Not part of FindIt.slnx. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/FindIt.Client/FindIt.Client.csproj" />
+    <ProjectReference Include="../../../src/FindIt.Shared/FindIt.Shared.csproj" />
+  </ItemGroup>
+</Project>
